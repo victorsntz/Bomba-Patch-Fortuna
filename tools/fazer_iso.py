@@ -11,6 +11,8 @@ uso: fazer_iso.py <saida.iso> <ARQUIVO_NO_DISCO=caminho/local> [...] [--volume N
 
 import argparse
 import datetime
+import os
+import shutil
 import struct
 import sys
 
@@ -74,7 +76,7 @@ def directory_records(directory, when):
         if is_dir:
             entries.append(record(name, item.lba, item.size, True, when))
         else:
-            entries.append(record(name + ';1', item['lba'], len(item['data']), False, when))
+            entries.append(record(name + ';1', item['lba'], item['size'], False, when))
     # um registro nunca atravessa o fim de um setor
     blob = bytearray()
     for entry in entries:
@@ -107,6 +109,15 @@ def path_table(dirs, big_endian):
 
 def build(files, volume='FORTUNA', when=None):
     """files: dict {'CAMINHO/NO/DISCO': bytes}. Devolve os bytes da imagem."""
+    import io
+    out = io.BytesIO()
+    write(out, files, volume, when)
+    return out.getvalue()
+
+
+def write(out, files, volume='FORTUNA', when=None):
+    """Grava a imagem em `out` (arquivo aberto em modo binário). Os valores de `files` podem ser bytes ou o
+    caminho de um arquivo local, que é copiado em pedaços: dá para montar um DVD inteiro sem caber na memória."""
     when = when or datetime.datetime(2026, 1, 1)
     root = Directory('', None)
     for path, data in files.items():
@@ -114,7 +125,8 @@ def build(files, volume='FORTUNA', when=None):
         current = root
         for part in parts[:-1]:
             current = current.dirs.setdefault(part, Directory(part, current))
-        current.files[parts[-1]] = {'data': data, 'lba': 0}
+        size = len(data) if isinstance(data, (bytes, bytearray)) else os.path.getsize(data)
+        current.files[parts[-1]] = {'data': data, 'size': size, 'lba': 0}
 
     dirs = walk(root)
     for number, directory in enumerate(dirs, 1):
@@ -134,10 +146,13 @@ def build(files, volume='FORTUNA', when=None):
     for directory in dirs:
         for name in sorted(directory.files):
             item = directory.files[name]
-            item['lba'], lba = lba, lba + sectors(len(item['data']))
+            item['lba'], lba = lba, lba + sectors(item['size'])
     total = lba
 
-    image = bytearray(total * SECTOR)
+    def put(lba, blob):
+        out.seek(lba * SECTOR)
+        out.write(blob)
+
     pvd = bytearray(SECTOR)
     pvd[0:6] = b'\x01CD001'
     pvd[6] = 1
@@ -158,17 +173,22 @@ def build(files, volume='FORTUNA', when=None):
     pvd[847:864] = b'0' * 16 + b'\x00'
     pvd[864:881] = b'0' * 16 + b'\x00'
     pvd[881] = 1
-    image[16 * SECTOR:17 * SECTOR] = pvd
-    image[17 * SECTOR:17 * SECTOR + 7] = b'\xffCD001\x01'
-
-    image[l_table * SECTOR:l_table * SECTOR + table_size] = path_table(dirs, False)
-    image[m_table * SECTOR:m_table * SECTOR + table_size] = path_table(dirs, True)
+    put(0, bytes(16 * SECTOR))
+    put(16, bytes(pvd))
+    put(17, b'\xffCD001\x01'.ljust(SECTOR, b'\x00'))
+    put(l_table, path_table(dirs, False))
+    put(m_table, path_table(dirs, True))
     for directory in dirs:
-        blob = directory_records(directory, when)
-        image[directory.lba * SECTOR:directory.lba * SECTOR + len(blob)] = blob
+        put(directory.lba, directory_records(directory, when))
         for item in directory.files.values():
-            image[item['lba'] * SECTOR:item['lba'] * SECTOR + len(item['data'])] = item['data']
-    return bytes(image)
+            if isinstance(item['data'], (bytes, bytearray)):
+                put(item['lba'], item['data'])
+            else:
+                out.seek(item['lba'] * SECTOR)
+                with open(item['data'], 'rb') as src:
+                    shutil.copyfileobj(src, out, 1 << 22)
+    out.seek(total * SECTOR)
+    out.truncate()
 
 
 def main():
@@ -182,11 +202,10 @@ def main():
         inside, sep, local = spec.partition('=')
         if not sep:
             parser.error('use NOME_NO_DISCO=arquivo/local, recebi %r' % spec)
-        with open(local, 'rb') as f:
-            files[inside] = f.read()
+        files[inside] = local
     with open(args.saida, 'wb') as out:
-        out.write(build(files, args.volume))
-    print('%s: %d arquivos, %d KiB' % (args.saida, len(files), sum(len(d) for d in files.values()) >> 10))
+        write(out, files, args.volume)
+    print('%s: %d arquivos, %d KiB' % (args.saida, len(files), sum(os.path.getsize(p) for p in files.values()) >> 10))
 
 
 if __name__ == '__main__':
