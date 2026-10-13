@@ -28,8 +28,12 @@ cd Bomba-Patch-Fortuna
 ./fortuna preparar                         # uma vez só, demora uns minutos
 ./fortuna raio-x ~/Downloads/bomba.iso     # olha o disco e prevê o que vai faltar
 ./fortuna portar bomba ~/Downloads/bomba.iso
-./fortuna jogar bomba                      # abre em http://localhost:8620
+./fortuna jogar bomba                      # abre o Chrome em http://localhost:8620
 ```
+
+O jogo aparece no navegador, não no Terminal: o Terminal só serve a página e
+precisa ficar aberto enquanto você joga. Perdeu o fio? `./fortuna checar` diz
+em que etapa você está.
 
 Abra no Chrome ou no Edge. Teclado: setas mexem, Z passa, X lança, A chuta,
 S enfia, W dispara, Enter é start. Controle USB também funciona.
@@ -75,7 +79,8 @@ máquina vira um arquivo em `patches/` e entra sozinho no próximo `portar`.
 | `diagnostico <nome>` | explica a última rodada em português |
 | `investigar <nome> <endereço>` | assembly, pseudocódigo em C e quem chama, via Ghidra |
 | `rea <nome>` | o que o [REA](https://github.com/morluto/rea) consegue ver do executável e dos drivers |
-| `jogar <nome>` | serve a página do jogo |
+| `jogar <nome>` | serve a página do jogo e abre o navegador |
+| `checar [nome]` | confere Docker, máquina, jogo e ISO e diz o próximo passo |
 | `teste` | checagem interna: roda um disco de teste mínimo para provar que o computador dá conta |
 
 ## E o REA?

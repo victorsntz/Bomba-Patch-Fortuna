@@ -51,8 +51,20 @@ versão navegador. Essa é a parte demorada: uns 20 a 40 minutos.
 ./fortuna jogar bomba
 ```
 
-Abra o **Chrome** (ou Edge) em **http://localhost:8620** e clique em
-**Apito inicial**. Para parar, volte ao Terminal e aperte `Ctrl + C`.
+O jogo não aparece no Terminal. O Terminal é a cozinha: ele prepara e serve,
+e o prato chega no **Chrome**, que abre sozinho em **http://localhost:8620**
+(se não abrir, abra você nesse endereço). Clique em **Apito inicial**.
+
+Deixe o Terminal aberto enquanto joga. Para parar, volte nele e aperte `Ctrl + C`.
+
+## Perdeu o fio?
+
+```bash
+./fortuna checar
+```
+
+Confere cada etapa (Docker aberto, máquina pronta, jogo traduzido, ISO no
+lugar) e diz qual é o próximo passo.
 
 ## Controles
 
@@ -80,12 +92,14 @@ confirma é a **bolinha**.
 
 ## Se algo der errado
 
-- **"o kit roda dentro do Docker"**: o Docker Desktop não está aberto.
+- **"o kit roda dentro do Docker"**: o Docker Desktop não está instalado.
+- **"o Docker Desktop está fechado"**: abra ele e espere a baleia parar.
+- **"ainda não foi traduzido"**: falta o passo 4 (`portar`).
 - **Página lenta**: use o Chrome atualizado. No Mac ele desenha pela placa de
   vídeo (WebGPU); outros navegadores podem cair no modo lento.
 - **Rostos dos jogadores lisos, tipo máscara**: é um defeito conhecido que eu
   ainda estou consertando. O resto do jogo funciona.
-- Qualquer outra coisa: rode `./fortuna diagnostico bomba` e me mande o
-  arquivo `relatorios/bomba/DIAGNOSTICO.md`.
+- Qualquer outra coisa: tire um print do Terminal (`Cmd + Shift + 4`) e me
+  mande, junto com o resultado do `./fortuna checar`.
 
 A ISO e a versão traduzida ficam só no seu Mac. Nada disso vai para o GitHub.

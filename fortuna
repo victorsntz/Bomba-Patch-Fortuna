@@ -35,7 +35,10 @@ Bomba Patch Fortuna
   ./fortuna rea <nome | arquivo>
         roda o REA no executável e nos drivers e guarda o que ele conseguiu ver
   ./fortuna jogar <nome>
-        abre o jogo traduzido em http://localhost:8620 (outra porta: FORTUNA_PORTA=9000)
+        põe o jogo no ar e abre o navegador em http://localhost:8620
+        (outra porta: FORTUNA_PORTA=9000; sem abrir o navegador: FORTUNA_ABRIR=0)
+  ./fortuna checar [nome]
+        confere cada etapa (Docker, máquina, jogo, disco) e diz o próximo passo
 
   Exemplo com o Bomba Patch:
     ./fortuna preparar
@@ -62,6 +65,7 @@ precisa_docker() {
 
 no_docker() {
   command -v docker > /dev/null || falha "neste sistema o kit roda dentro do Docker. Instale o Docker Desktop (https://www.docker.com/products/docker-desktop) e tente de novo. No Windows, outra saída é usar o WSL2 com Ubuntu."
+  docker info > /dev/null 2>&1 || falha "o Docker Desktop está fechado. Abra ele (Aplicativos → Docker), espere a baleia lá em cima parar de mexer e rode de novo."
   local alvo=base
   case "${1:-}" in investigar|rea) alvo=investigacao ;; esac
   # a imagem Intel (linux/amd64) é a testada de ponta a ponta; no Mac com chip M o Docker roda ela pelo Rosetta.
@@ -75,7 +79,8 @@ no_docker() {
   local tag="bomba-patch-fortuna:$alvo-$arquitetura-$(cksum < "$ROOT/docker/Dockerfile" | cut -d' ' -f1)"
   if ! docker image inspect "$tag" > /dev/null 2>&1; then
     passo "montando a imagem Docker ($alvo). Só na primeira vez, demora uns minutos"
-    docker build ${plataforma[@]+"${plataforma[@]}"} --target "$alvo" -t "$tag" "$ROOT/docker"
+    docker build ${plataforma[@]+"${plataforma[@]}"} --target "$alvo" -t "$tag" "$ROOT/docker" ||
+      falha "não consegui montar a imagem Docker (a mensagem acima diz o motivo). Se falar de espaço, libere uns 10 GB; se falar de rede, confira a internet e rode de novo."
   fi
   local volumes=(-v "$ROOT:$ROOT" -w "$ROOT")
   local args=()
@@ -149,7 +154,7 @@ preparar() {
   [ "$web" = 1 ] || opcoes=(--native-only)
   "$ENGINE/scripts/setup.sh" "${opcoes[@]}"
   if [ "$ghidra" = 1 ]; then baixar_ghidra; fi
-  passo "pronto. Próximo passo: ./fortuna teste"
+  passo "pronto. Próximo passo: ./fortuna portar bomba <caminho da sua ISO>"
 }
 
 baixar_ghidra() {
@@ -399,8 +404,96 @@ jogar() {
   [ -f "$web/ps2web.html" ] || falha "não tem página para '$nome'. Rode ./fortuna portar $nome <jogo.iso> antes."
   local host=127.0.0.1
   [ "${FORTUNA_NO_CONTEINER:-}" = 1 ] && host=0.0.0.0
-  echo "Abra no Chrome ou no Edge. Teclado: setas, Z ✕, X ○, A □, S △, Enter start. Controle USB também funciona."
+  echo "No navegador: setas mexem, X é a bolinha (confirma no menu), Z é o ✕, A □, S △, Enter start. Controles também funcionam."
   exec "${PY[@]}" "$TOOLS/servir.py" "$web" "$disco" --host "$host" --porta "${FORTUNA_PORTA:-8620}"
+}
+
+# ------------------------------------------------------------------ navegador
+
+endereco() { echo "http://localhost:${FORTUNA_PORTA:-8620}/"; }
+
+no_ar() { command -v curl > /dev/null && curl -s -o /dev/null --max-time 2 "$(endereco)"; }
+
+# o Terminal só serve a página; o jogo aparece no navegador. Abre ele assim que o servidor responder
+abrir_navegador() {
+  [ "${FORTUNA_ABRIR:-1}" = 1 ] || return 0
+  local abrir=()
+  if [ "$(uname -s)" = Darwin ]; then
+    abrir=(open)
+    [ -d "/Applications/Google Chrome.app" ] && abrir=(open -a "Google Chrome")
+  elif command -v xdg-open > /dev/null && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+    abrir=(xdg-open)
+  fi
+  if [ ${#abrir[@]} = 0 ] || ! command -v curl > /dev/null; then return 0; fi
+  # o primeiro arranque do Docker no Mac pode levar um minuto; desiste depois de dez
+  (
+    for _ in $(seq 1 600); do
+      if no_ar; then "${abrir[@]}" "$(endereco)" > /dev/null 2>&1; exit 0; fi
+      sleep 1
+    done
+  ) &
+}
+
+# antes de subir o Docker: confere o que dá para conferir daqui e já deixa o navegador engatilhado
+preparar_jogar() {
+  local nome="${1:-}"
+  [ -n "$nome" ] || falha "uso: ./fortuna jogar <nome> (ex.: ./fortuna jogar bomba)"
+  [ -f "$ENGINE/build/web-$nome/ps2web.html" ] || falha "o $nome ainda não foi traduzido. Rode antes: ./fortuna portar $nome <caminho da sua ISO>"
+  local disco="$ENGINE/games/$nome/disc.iso"
+  if [ -L "$disco" ] && [ ! -e "$disco" ]; then
+    falha "a ISO mudou de lugar desde a tradução (era $(readlink "$disco")). Devolva ela para lá ou rode de novo: ./fortuna portar $nome <caminho novo da ISO>"
+  fi
+  if no_ar; then
+    echo "O jogo já está no ar em outro Terminal. Abrindo $(endereco)"
+    FORTUNA_ABRIR=1 abrir_navegador
+    wait
+    exit 0
+  fi
+  echo
+  echo "O jogo aparece no navegador, não aqui. Este Terminal é a cozinha: deixe ele aberto enquanto joga."
+  echo "Se o navegador não abrir sozinho, abra o Chrome em $(endereco)"
+  echo
+  abrir_navegador
+}
+
+# ------------------------------------------------------------------ checagem
+
+checar() {
+  local nome="${1:-bomba}" falta=""
+  local ok="  ✅" nao="  ❌"
+  echo "Checando o kit para '$nome':"
+  if precisa_docker; then
+    if ! command -v docker > /dev/null; then
+      echo "$nao Docker Desktop não instalado"; falta=${falta:-"instale o Docker Desktop: https://www.docker.com/products/docker-desktop"}
+    elif ! docker info > /dev/null 2>&1; then
+      echo "$nao Docker Desktop instalado, mas fechado"; falta=${falta:-"abra o Docker Desktop e espere a baleia parar"}
+    else
+      echo "$ok Docker Desktop aberto"
+    fi
+  fi
+  if [ -x "$ENGINE/build/tools/eerecomp" ]; then
+    echo "$ok máquina de tradução pronta"
+  else
+    echo "$nao máquina de tradução ainda não preparada"; falta=${falta:-"./fortuna preparar"}
+  fi
+  if [ -f "$ENGINE/build/web-$nome/ps2web.html" ]; then
+    echo "$ok $nome traduzido para o navegador"
+  else
+    echo "$nao $nome ainda não traduzido"; falta=${falta:-"./fortuna portar $nome <caminho da sua ISO>"}
+  fi
+  local disco="$ENGINE/games/$nome/disc.iso"
+  if [ -e "$disco" ]; then
+    echo "$ok ISO no lugar ($(readlink "$disco" 2> /dev/null || echo "$disco"))"
+  elif [ -L "$disco" ]; then
+    echo "$nao a ISO saiu de $(readlink "$disco")"; falta=${falta:-"devolva a ISO para lá ou rode ./fortuna portar $nome <caminho novo>"}
+  fi
+  if no_ar; then
+    echo "$ok jogo no ar em $(endereco) (é só abrir no Chrome)"
+  else
+    echo "  ·  jogo fora do ar (normal se você não rodou ./fortuna jogar $nome)"
+  fi
+  echo
+  if [ -n "$falta" ]; then echo "Próximo passo: $falta"; else echo "Tudo certo. Para jogar: ./fortuna jogar $nome"; fi
 }
 
 # ------------------------------------------------------------------ entrada
@@ -408,6 +501,8 @@ jogar() {
 comando="${1:-}"
 [ -n "$comando" ] || { ajuda; exit 0; }
 case "$comando" in -h|--help|ajuda) ajuda; exit 0 ;; esac
+case "$comando" in checar|checagem) checar "${@:2}"; exit 0 ;; esac
+if [ "$comando" = jogar ] && [ "${FORTUNA_NO_CONTEINER:-}" != 1 ]; then preparar_jogar "${2:-}"; fi
 if precisa_docker; then no_docker "$@"; fi
 shift
 case "$comando" in
