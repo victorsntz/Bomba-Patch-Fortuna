@@ -141,4 +141,16 @@ controles simulados no navegador.
 | 6 | com o `patches/0005`: passou do vídeo e chegou na tela de título |
 | 7 | tradutor com ponteiros e chamadas de cauda: **menu principal na tela** (Duelo, Master Liga, Liga, Copa...), rodando os 90 segundos sem parar |
 | 8 | o "baixo" no menu chamou atalhos de uma instrução do `select1.ovl` (`j` direto para o executável) que o verificador do tradutor recusava; corrigido no `patches/0001` |
-| 9 | roteiro novo (X a cada 2 segundos depois do menu) para atravessar Duelo, escolha de times e partida: em andamento |
+| 9 | X a cada 2 segundos no menu: nada acontece. A base é japonesa, então quem confirma é a bolinha (○) |
+| 10 | com ○: Selecionar Time, Menu de Configuração, carregamento, Maracanã em 3D, torcida, entrada em campo e escalação |
+| 11 | rodada de 3 min 30 s com chute e corrida: **partida rolando**, placar, relógio, radar, Casé TV e placas Bomba Patch |
+
+## O que falta
+
+- **Rostos dos jogadores:** a geometria aparece (olhos, nariz, dentes), mas a
+  pele sai lisa, sem a textura do rosto. O Winning Eleven monta cada rosto numa
+  textura em tempo real; algo nessa composição não acontece no "pintor" (GS) da
+  máquina. Investigando com despejo da memória de vídeo na hora da escalação.
+- **Versão navegador:** compilando e testando no Chrome.
+- **Vídeo de abertura:** o disco não traz `WE10_OP.PSS`, então o jogo pula o
+  vídeo (como no PS2).
