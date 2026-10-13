@@ -7,6 +7,15 @@ navegador roda (WebAssembly), e a parte que o console fazia sozinho (som,
 controle, disco, vídeo) é imitada por uma máquina de tradução. A ISO e tudo o
 que sai dela ficam só no seu computador.
 
+**No Mac?** O passo a passo mastigado está em [docs/COMO-JOGAR-NO-MAC.md](docs/COMO-JOGAR-NO-MAC.md).
+
+## Onde estamos
+
+O Bomba Patch traduzido já vai do memory card ao menu, escolha de times e
+partida rolando, no executor nativo e no navegador. Dois jogadores com controle
+Bluetooth funcionam. Falta consertar os rostos dos jogadores (saem lisos). O
+diário da engenharia reversa está em [docs/BOMBA-PATCH.md](docs/BOMBA-PATCH.md).
+
 ## Do zero até o apito inicial
 
 Precisa de: Mac ou Linux (no Windows, use o WSL2 com Ubuntu), Git e uns 5 GB
