@@ -279,12 +279,21 @@ investigar() {
   mkdir -p "$projeto"
   local nome_elf
   nome_elf="$(basename "$elf")"
-  local acao=(-import "$elf")
-  [ -d "$projeto/fortuna.rep" ] && [ -f "$projeto/.importado-$nome_elf" ] && acao=(-process "$nome_elf" -noanalysis)
+  # o Ghidra às vezes chuta "MIPS R6" para executáveis do PS2 e embaralha instruções; o EE é MIPS64 com endereços de
+  # 32 bits e a convenção de chamada n32 (oito registradores de argumento)
+  local idioma=(-processor MIPS:LE:64:64-32addr -cspec n32)
+  local acao=(-import "$elf" "${idioma[@]}")
+  if [ "$(head -c 4 "$elf")" = MWo3 ]; then
+    # overlay da Konami: código cru que mora sempre no endereço gravado no cabeçalho
+    local origem
+    origem=$(od -An -tx4 -j8 -N4 "$elf" | tr -d ' ')
+    acao=(-import "$elf" -loader BinaryLoader -loader-baseAddr "0x$origem" "${idioma[@]}")
+  fi
+  [ -d "$projeto/fortuna.rep" ] && [ -f "$projeto/.importado-n32-$nome_elf" ] && acao=(-process "$nome_elf" -noanalysis)
   "$ghidra/support/analyzeHeadless" "$projeto" fortuna "${acao[@]}" \
     -scriptPath "$TOOLS/ghidra" -postScript Investigar.java "$saida" "$@" > "$projeto/ultimo.log" 2>&1 \
     || { tail -20 "$projeto/ultimo.log"; falha "o Ghidra falhou, log em $projeto/ultimo.log"; }
-  touch "$projeto/.importado-$nome_elf"
+  touch "$projeto/.importado-n32-$nome_elf"
   echo "Relatório: ${saida#$ROOT/}"
 }
 
