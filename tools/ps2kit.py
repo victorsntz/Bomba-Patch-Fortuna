@@ -289,6 +289,39 @@ class Elf:
         return found
 
 
+# ---------------------------------------------------------------- pacotes (AFS e o da Konami)
+
+def entradas_empacotadas(data):
+    """Itens de um AFS ou do pacote da Konami que começa com 0x600. [(deslocamento, tamanho)]"""
+    if len(data) < 0x30:
+        return []
+    if data[:4] == b'AFS\x00':
+        count = struct.unpack_from('<I', data, 4)[0]
+        if not 0 < count < 0x10000 or 8 + count * 8 > len(data):
+            return []
+        items = [struct.unpack_from('<II', data, 8 + i * 8) for i in range(count)]
+        return [(o, s) for o, s in items if 0 < o and o + s <= len(data)]
+    if struct.unpack_from('<I', data, 0)[0] == 0x600:
+        count = struct.unpack_from('<I', data, 0x20)[0]
+        if not 0 < count < 0x1000 or 0x28 + count * 4 > len(data):
+            return []
+        starts = [struct.unpack_from('<I', data, 0x28 + 4 * i)[0] + 0x20 for i in range(count)]
+        ends = starts[1:] + [len(data)]
+        return [(s, e - s) for s, e in zip(starts, ends) if 0 < s < e <= len(data)]
+    return []
+
+
+def overlay_mwo3(data):
+    """Cabeçalho de um overlay de código Metrowerks (MWo3), o formato da Konami no Winning Eleven e no PES."""
+    if len(data) < 0x40 or data[:4] != b'MWo3':
+        return None
+    ident, load, text, dados, bss, end = struct.unpack_from('<6I', data, 4)
+    if end - load != 0x40 + text + dados:
+        return None
+    return {'nome': data[0x20:0x40].split(b'\x00')[0].decode('ascii', 'replace'), 'id': ident, 'endereco': load,
+            'codigo': text, 'dados': dados, 'bss': bss}
+
+
 # ---------------------------------------------------------------- imagens IOPRP
 
 def romdir(data):

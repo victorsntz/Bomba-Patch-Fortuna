@@ -1,0 +1,403 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 1420ded..5fab63a 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -18,7 +18,8 @@ if(NOT EMSCRIPTEN)
+         recomp/elf.cpp
+         recomp/analysis.cpp
+         recomp/codegen.cpp
+-        recomp/snr2.cpp)
++        recomp/snr2.cpp
++        recomp/mwo3.cpp)
+     target_compile_options(eerecomp PRIVATE -Wall -Wextra)
+ 
+     add_executable(vujit_dump recomp/vujit_dump.cpp runtime/src/vu_jit.cpp)
+diff --git a/recomp/codegen.cpp b/recomp/codegen.cpp
+index 3ed6fe4..10ed214 100644
+--- a/recomp/codegen.cpp
++++ b/recomp/codegen.cpp
+@@ -798,17 +798,19 @@ void generate(const std::vector<Translation> &translations, const CodegenOptions
+             header << "void " << r.function << "(ps2::Cpu &c, std::uint32_t entry, std::uint32_t depth);\n";
+             header << "extern const std::uint16_t " << r.table << "[];\n";
+         }
+-        table << "const ps2::UnitInfo " << (t.relocatable ? t.prefix + "units" : "kUnits") << "[] = {\n";
+-        for (const UnitRow &r : rows) table << std::format("    {{{}, {}u, &{}, {}}},\n", hex(r.base), r.size, r.function, r.table);
++        const bool main_program = t.name.empty();
++        table << "const ps2::UnitInfo " << (main_program ? std::string("kUnits") : t.prefix + "units") << "[] = {\n";
++        for (const UnitRow &r : rows) table << std::format("    {{{}, {}u, &{}, {}}},\n", hex(r.base - t.origin), r.size, r.function, r.table);
+         table << "};\n\n";
+-        if (!t.relocatable) {
++        if (main_program) {
+             main_units = rows.size();
+             continue;
+         }
+         table << "const std::uint32_t " << t.prefix << "checks[] = {";
+         for (const auto &[at, value] : t.checks) table << std::format("{}, {}, ", hex(at), hex(value));
+         table << "};\n\n";
+-        modules << std::format("    {{\"{}\", {}, {}checks, {}u, {}units, {}u}},\n", t.name, hex(t.size), t.prefix, t.checks.size(), t.prefix, rows.size());
++        modules << std::format("    {{\"{}\", {}, {}checks, {}u, {}units, {}u, {}}},\n", t.name, hex(t.size), t.prefix, t.checks.size(), t.prefix, rows.size(),
++                               hex(t.origin));
+         ++module_count;
+     }
+     header << "}\n";
+diff --git a/recomp/codegen.hpp b/recomp/codegen.hpp
+index 26e71b8..9f58e3f 100644
+--- a/recomp/codegen.hpp
++++ b/recomp/codegen.hpp
+@@ -27,6 +27,8 @@ struct Translation {
+     std::string name;
+     std::uint32_t size{};
+     std::vector<std::pair<std::uint32_t, std::uint32_t>> checks;
++    // address a fixed overlay always occupies; 0 for the main program and for relocatable modules
++    std::uint32_t origin{};
+ };
+ 
+ void generate(const std::vector<Translation> &translations, const CodegenOptions &options);
+diff --git a/recomp/main.cpp b/recomp/main.cpp
+index a448dee..e50469b 100644
+--- a/recomp/main.cpp
++++ b/recomp/main.cpp
+@@ -1,6 +1,7 @@
+ #include "analysis.hpp"
+ #include "codegen.hpp"
+ #include "elf.hpp"
++#include "mwo3.hpp"
+ #include "snr2.hpp"
+ 
+ #include <algorithm>
+@@ -90,8 +91,45 @@ std::vector<Snr2Module> read_modules(const std::string &dir) {
+     return modules;
+ }
+ 
++std::vector<Mwo3Overlay> read_overlays(const std::string &dir) {
++    std::vector<std::filesystem::path> paths;
++    for (const auto &entry : std::filesystem::directory_iterator(dir))
++        if (entry.is_regular_file()) paths.push_back(entry.path());
++    std::sort(paths.begin(), paths.end());
++    std::vector<Mwo3Overlay> overlays;
++    std::map<std::string, int> names;
++    for (const auto &path : paths) {
++        std::ifstream file(path, std::ios::binary);
++        std::vector<std::uint8_t> bytes{std::istreambuf_iterator<char>(file), {}};
++        auto overlay = read_mwo3_overlay(std::move(bytes));
++        if (!overlay) continue;
++        if (std::any_of(overlays.begin(), overlays.end(), [&](const Mwo3Overlay &o) { return o.bytes == overlay->bytes; })) continue;
++        if (const int n = names[overlay->name]++) overlay->name += "_" + std::to_string(n + 1);
++        overlays.push_back(std::move(*overlay));
++    }
++    return overlays;
++}
++
++// what tells one overlay from another loaded at the same address: header, id, name and a few code words
++std::vector<std::pair<std::uint32_t, std::uint32_t>> overlay_checks(const Mwo3Overlay &o, const Program &program) {
++    const auto word = [&](std::uint32_t offset) {
++        std::uint32_t value;
++        std::memcpy(&value, o.bytes.data() + offset, 4);
++        return value;
++    };
++    std::vector<std::pair<std::uint32_t, std::uint32_t>> checks{{0, kMwo3Magic}, {4, o.id}, {0x20, word(0x20)}};
++    std::vector<std::uint32_t> words;
++    for (std::uint32_t pc = o.text_begin; pc + 4 <= o.text_end; pc += 4)
++        if (program.is_code(pc) && word(pc - o.origin)) words.push_back(pc - o.origin);
++    for (std::size_t k = 0; k < 8 && !words.empty(); ++k) {
++        const std::uint32_t offset = words[k * words.size() / 8];
++        if (checks.back().first != offset) checks.emplace_back(offset, word(offset));
++    }
++    return checks;
++}
++
+ int usage() {
+-    std::fprintf(stderr, "usage: eerecomp <elf> [--entries file] [--modules dir] [--probes file] [--out dir] [--stats]\n");
++    std::fprintf(stderr, "usage: eerecomp <elf> [--entries file] [--modules dir] [--overlays dir] [--probes file] [--out dir] [--stats]\n");
+     return 2;
+ }
+ 
+@@ -99,7 +137,7 @@ int usage() {
+ 
+ int main(int argc, char **argv) {
+     if (argc < 2) return usage();
+-    std::string elf_path = argv[1], entries_path, out, probes_path, modules_dir;
++    std::string elf_path = argv[1], entries_path, out, probes_path, modules_dir, overlays_dir;
+     bool stats = false;
+     for (int i = 2; i < argc; ++i) {
+         const std::string arg = argv[i];
+@@ -108,6 +146,7 @@ int main(int argc, char **argv) {
+         else if (arg == "--out" && i + 1 < argc) out = argv[++i];
+         else if (arg == "--probes" && i + 1 < argc) probes_path = argv[++i];
+         else if (arg == "--modules" && i + 1 < argc) modules_dir = argv[++i];
++        else if (arg == "--overlays" && i + 1 < argc) overlays_dir = argv[++i];
+         else return usage();
+     }
+ 
+@@ -142,6 +181,21 @@ int main(int argc, char **argv) {
+             std::printf("%zu modules, code %zu instructions (%zu KiB), %zu sites in the program linked at run time\n", modules.size(), module_code,
+                         module_code * 4 / 1024, imports.size());
+ 
++        const std::vector<Mwo3Overlay> overlays = overlays_dir.empty() ? std::vector<Mwo3Overlay>{} : read_overlays(overlays_dir);
++        std::size_t overlay_code = 0;
++        for (const Mwo3Overlay &o : overlays) {
++            images.push_back(mwo3_image(o));
++            std::vector<std::uint32_t> seeds = mwo3_function_starts(o);
++            if (const auto it = entries.modules.find(o.name); it != entries.modules.end())
++                for (std::uint32_t offset : it->second) seeds.push_back(o.origin + offset);
++            programs.push_back(analyse(images.back(), seeds, {}));
++            overlay_code += code_size(programs.back());
++            translations.push_back({&images.back(), &programs.back(), nullptr, "o_" + o.name + "_", false, o.name, o.size,
++                                    overlay_checks(o, programs.back()), o.origin});
++        }
++        if (!overlays.empty())
++            std::printf("%zu overlays, code %zu instructions (%zu KiB)\n", overlays.size(), overlay_code, overlay_code * 4 / 1024);
++
+         if (!out.empty()) {
+             CodegenOptions options;
+             options.output = out;
+diff --git a/recomp/mwo3.cpp b/recomp/mwo3.cpp
+new file mode 100644
+index 0000000..35175d5
+--- /dev/null
++++ b/recomp/mwo3.cpp
+@@ -0,0 +1,60 @@
++#include "mwo3.hpp"
++
++#include <cctype>
++#include <cstring>
++
++namespace recomp {
++
++namespace {
++
++std::uint32_t u32(const std::vector<std::uint8_t> &b, std::uint32_t o) {
++    std::uint32_t v = 0;
++    if (o <= b.size() && b.size() - o >= 4) std::memcpy(&v, b.data() + o, 4);
++    return v;
++}
++
++constexpr std::uint32_t kHeader = 0x40;
++
++}
++
++std::optional<Mwo3Overlay> read_mwo3_overlay(std::vector<std::uint8_t> bytes) {
++    if (bytes.size() < kHeader || u32(bytes, 0) != kMwo3Magic) return std::nullopt;
++    Mwo3Overlay o;
++    o.id = u32(bytes, 0x04);
++    o.origin = u32(bytes, 0x08);
++    const std::uint32_t text = u32(bytes, 0x0C), data = u32(bytes, 0x10);
++    const std::uint32_t end = u32(bytes, 0x18);
++    if (o.origin & 3u || text & 3u || end < o.origin || end - o.origin != kHeader + text + data) return std::nullopt;
++    o.size = end - o.origin;
++    if (o.size > bytes.size()) return std::nullopt;
++    o.text_begin = o.origin + kHeader;
++    o.text_end = o.text_begin + text;
++    for (std::uint32_t at = 0x20; at < kHeader && bytes[at]; ++at) o.name += static_cast<char>(bytes[at]);
++    if (const auto dot = o.name.find('.'); dot != std::string::npos) o.name = o.name.substr(0, dot);
++    std::string clean;
++    for (char ch : o.name) clean += std::isalnum(static_cast<unsigned char>(ch)) ? ch : '_';
++    o.name = clean.empty() ? "overlay" : clean;
++    bytes.resize(o.size);
++    o.bytes = std::move(bytes);
++    return o;
++}
++
++Image mwo3_image(const Mwo3Overlay &overlay) {
++    return Image::raw(overlay.origin, overlay.bytes, {overlay.text_begin, overlay.text_end}, overlay.text_end - overlay.origin);
++}
++
++std::vector<std::uint32_t> mwo3_function_starts(const Mwo3Overlay &overlay) {
++    std::vector<std::uint32_t> starts{overlay.text_begin};
++    for (std::uint32_t at = overlay.text_begin + 8; at + 4 <= overlay.text_end; at += 4) {
++        const std::uint32_t o = at - overlay.origin;
++        const std::uint32_t word = u32(overlay.bytes, o);
++        const bool opens_frame = (word >> 16) == 0x27BDu && (word & 0x8000u);  // addiu sp, sp, -N
++        if (!opens_frame) continue;
++        const bool after_return = u32(overlay.bytes, o - 8) == 0x03E00008u;   // jr ra, then its delay slot
++        const bool after_padding = u32(overlay.bytes, o - 4) == 0 && u32(overlay.bytes, o - 8) == 0;
++        if (after_return || after_padding) starts.push_back(at);
++    }
++    return starts;
++}
++
++}
+diff --git a/recomp/mwo3.hpp b/recomp/mwo3.hpp
+new file mode 100644
+index 0000000..c1e9bf0
+--- /dev/null
++++ b/recomp/mwo3.hpp
+@@ -0,0 +1,34 @@
++#pragma once
++
++#include "elf.hpp"
++
++#include <cstdint>
++#include <optional>
++#include <string>
++#include <vector>
++
++namespace recomp {
++
++// Code overlay in the Metrowerks "MWo3" layout (Konami's Winning Eleven / PES on PS2, among others).
++// The whole file, header included, is read to a fixed address, so the code is absolute; several
++// overlays can share an address and replace each other at run time.
++//   0x00 'MWo3'  0x04 id  0x08 load address  0x0C text size  0x10 data size  0x14 bss size
++//   0x18 end of text and data in memory  0x1C same  0x20 name, then text at 0x40
++struct Mwo3Overlay {
++    std::string name;
++    std::uint32_t id{};
++    std::uint32_t origin{};
++    std::uint32_t size{};
++    std::uint32_t text_begin{};
++    std::uint32_t text_end{};
++    std::vector<std::uint8_t> bytes;
++};
++
++inline constexpr std::uint32_t kMwo3Magic = 0x336F574Du;
++
++std::optional<Mwo3Overlay> read_mwo3_overlay(std::vector<std::uint8_t> bytes);
++Image mwo3_image(const Mwo3Overlay &overlay);
++// function starts a compiler leaves behind: a stack frame opened right after the previous function returned
++std::vector<std::uint32_t> mwo3_function_starts(const Mwo3Overlay &overlay);
++
++}
+diff --git a/runtime/include/ps2/generated.hpp b/runtime/include/ps2/generated.hpp
+index 3d473fb..5e9ee25 100644
+--- a/runtime/include/ps2/generated.hpp
++++ b/runtime/include/ps2/generated.hpp
+@@ -28,6 +28,8 @@ struct ModuleInfo {
+     std::uint32_t check_count;
+     const UnitInfo *units;
+     std::uint32_t count;
++    // fixed overlays (MWo3) always sit at this address and are told apart by their checks; 0 for relocatable SNR2 modules
++    std::uint32_t origin;
+ };
+ 
+ void register_units(const UnitInfo *units, std::uint32_t count);
+diff --git a/runtime/src/dispatch.cpp b/runtime/src/dispatch.cpp
+index 654a6da..ed22102 100644
+--- a/runtime/src/dispatch.cpp
++++ b/runtime/src/dispatch.cpp
+@@ -32,7 +32,7 @@ std::uint32_t g_module_span = 0;
+ std::vector<Instance> g_instances;
+ 
+ bool loaded_at(const ModuleInfo &m, std::uint32_t base) {
+-    if (ld32(base + 0x2Cu) != m.size) return false;
++    if (!m.origin && ld32(base + 0x2Cu) != m.size) return false;
+     for (std::uint32_t k = 0; k < m.check_count; ++k)
+         if (ld32(base + m.checks[2 * k]) != m.checks[2 * k + 1]) return false;
+     return true;
+@@ -47,6 +47,13 @@ const Instance *instance_for(std::uint32_t pc) {
+         break;
+     }
+     if (!g_module_count || pc >= kRamSize) return nullptr;
++    for (std::uint32_t k = 0; k < g_module_count; ++k) {
++        const ModuleInfo &m = g_modules[k];
++        if (m.origin && pc - m.origin < m.size && loaded_at(m, m.origin)) {
++            g_instances.push_back({m.origin, &m});
++            return &g_instances.back();
++        }
++    }
+     for (std::uint32_t at = pc & ~15u; pc - at < g_module_span; at -= 16) {
+         if (ld32(at) == kModuleMagic) {
+             for (std::uint32_t k = 0; k < g_module_count; ++k)
+@@ -102,7 +109,9 @@ void register_modules(const ModuleInfo *modules, std::uint32_t count) {
+     g_modules = modules;
+     g_module_count = count;
+     g_instances.clear();
+-    for (std::uint32_t k = 0; k < count; ++k) g_module_span = std::max(g_module_span, modules[k].size);
++    g_module_span = 0;
++    for (std::uint32_t k = 0; k < count; ++k)
++        if (!modules[k].origin) g_module_span = std::max(g_module_span, modules[k].size);
+ }
+ 
+ bool has_code(std::uint32_t pc) {
+diff --git a/scripts/disc.py b/scripts/disc.py
+index 474ecef..1333bfe 100644
+--- a/scripts/disc.py
++++ b/scripts/disc.py
+@@ -134,9 +134,56 @@ def modules(image, destination):
+     print('%d SNR2 modules extracted to %s' % (len(found), destination))
+ 
+ 
++def packed_entries(image, sector, size):
++    """Entries of the archives code overlays travel in: AFS, and the Konami package that starts with 0x600."""
++    head = read_at(image, sector, 0, 0x30)
++    if len(head) < 0x30:
++        return []
++    if head[:4] == b'AFS\0':
++        count = struct.unpack_from('<I', head, 4)[0]
++        if not 0 < count < 0x10000:
++            return []
++        table = read_at(image, sector, 8, count * 8)
++        return [struct.unpack_from('<II', table, i * 8) for i in range(count)]
++    if struct.unpack_from('<I', head, 0)[0] == 0x600:
++        count = struct.unpack_from('<I', head, 0x20)[0]
++        if not 0 < count < 0x1000:
++            return []
++        offsets = struct.unpack_from('<%dI' % count, read_at(image, sector, 0x28, count * 4))
++        starts = [o + 0x20 for o in offsets]
++        ends = starts[1:] + [size]
++        return [(s, e - s) for s, e in zip(starts, ends) if 0 < s < e <= size]
++    return []
++
++
++def overlays(image, destination):
++    """Code overlays in the Metrowerks MWo3 layout (Konami's Winning Eleven / PES), by the name in their header."""
++    found = {}
++    for path, _, sector, size in image.files():
++        candidates = [(0, size)] if read_at(image, sector, 0, 4) == b'MWo3' else packed_entries(image, sector, size)
++        for offset, length in candidates:
++            if offset + 0x40 > size or read_at(image, sector, offset, 4) != b'MWo3':
++                continue
++            header = read_at(image, sector, offset, 0x40)
++            load, text, data, end = struct.unpack_from('<IIII', header, 8)[0], struct.unpack_from('<I', header, 12)[0], \
++                struct.unpack_from('<I', header, 16)[0], struct.unpack_from('<I', header, 0x18)[0]
++            if end - load != 0x40 + text + data or end - load > length:
++                continue
++            name = header[0x20:0x40].split(b'\0')[0].decode('ascii', 'replace') or 'overlay'
++            body = read_at(image, sector, offset, end - load)
++            if found.get(name, body) != body:
++                name = '%s_%s' % (path.replace('/', '_'), name)
++            found[name] = body
++    os.makedirs(destination, exist_ok=True)
++    for name, body in found.items():
++        with open(os.path.join(destination, name), 'wb') as out:
++            out.write(body)
++    print('%d MWo3 overlays extracted to %s' % (len(found), destination))
++
++
+ def main():
+     parser = argparse.ArgumentParser(description='Read files from PS2 CD and DVD images, including both layers of a DVD9.')
+-    parser.add_argument('command', choices=['info', 'list', 'extract', 'modules'])
++    parser.add_argument('command', choices=['info', 'list', 'extract', 'modules', 'overlays'])
+     parser.add_argument('image')
+     parser.add_argument('destination', nargs='?')
+     parser.add_argument('patterns', nargs='*', help='paths or globs to extract, everything below --limit if omitted')
+@@ -151,6 +198,10 @@ def main():
+         if not args.destination:
+             parser.error('modules needs a destination folder')
+         modules(image, args.destination)
++    elif args.command == 'overlays':
++        if not args.destination:
++            parser.error('overlays needs a destination folder')
++        overlays(image, args.destination)
+     else:
+         if not args.destination:
+             parser.error('extract needs a destination folder')
+diff --git a/scripts/port.sh b/scripts/port.sh
+index 19920eb..7cb8eb6 100755
+--- a/scripts/port.sh
++++ b/scripts/port.sh
+@@ -98,7 +98,14 @@ if grep -q SNR2 "$elf"; then
+   modules=(--modules "$game/modules")
+ fi
+ 
+-translate() { "$tools/eerecomp" "$elf" --entries "$game/entries.txt" "${modules[@]}" --out "$generated" | tail -1; }
++overlays=()
++python3 -I "$here/disc.py" overlays "$iso" "$game/overlays" > /dev/null
++if compgen -G "$game/overlays/*" > /dev/null; then
++  overlays=(--overlays "$game/overlays")
++  echo "$(ls "$game/overlays" | wc -l) code overlays (MWo3)"
++fi
++
++translate() { "$tools/eerecomp" "$elf" --entries "$game/entries.txt" "${modules[@]}" "${overlays[@]}" --out "$generated" | tail -2; }
+ 
+ echo "== [3/6] machine code to C++"
+ touch "$game/entries.txt"

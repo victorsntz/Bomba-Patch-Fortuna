@@ -97,7 +97,7 @@ no_docker() {
 aplicar_cara() {
   # a página do jogo com a cara Fortuna e os consertos que a gente fez no motor
   cp "$ROOT/overlay/web/shell.html" "$ENGINE/web/shell.html"
-  local p
+  local p novos=0
   for p in "$ROOT"/patches/*.patch; do
     [ -e "$p" ] || continue
     if git -C "$ENGINE" apply --reverse --check "$p" 2> /dev/null; then
@@ -105,7 +105,12 @@ aplicar_cara() {
     fi
     git -C "$ENGINE" apply "$p" || falha "o conserto $(basename "$p") não encaixa no motor. Rode ./fortuna preparar --do-zero"
     echo "conserto aplicado: $(basename "$p")"
+    novos=1
   done
+  # conserto novo no tradutor só vale depois de recompilar as ferramentas
+  if [ "$novos" = 1 ] && [ -f "$ENGINE/build/tools/build.ninja" ]; then
+    ninja -C "$ENGINE/build/tools" eerecomp vurecomp > /dev/null
+  fi
 }
 
 preparar() {

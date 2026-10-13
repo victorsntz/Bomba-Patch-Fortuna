@@ -14,6 +14,7 @@ import argparse
 import json
 import os
 import re
+import struct
 import sys
 import tempfile
 import zipfile
@@ -80,8 +81,9 @@ def analisar(iso_path, engine_dir):
                       if m.group().upper().endswith((b'.IRX', b'.IRX;1', b'.IMG', b'.IMG;1')) or m.group().lower().startswith(b'rom0:')})
     out['caminhos_no_executavel'] = pedidos
 
-    # módulos do IOP no disco e dentro de imagens IOPRP
+    # módulos do IOP no disco, dentro de imagens IOPRP e dentro de pacotes; overlays de código
     modules = []
+    overlays = {}
     for f in iso.files():
         upper_path = f['path'].upper()
         if upper_path.endswith('.IRX'):
@@ -91,6 +93,18 @@ def analisar(iso_path, engine_dir):
             for name, data in ps2kit.romdir(iso.read(f)):
                 if data[:4] == b'\x7fELF':
                     modules.append(('ioprp', f['path'] + ':' + name, data))
+        elif f['size'] < 64 << 20 and iso.read(f, 0, 4) in (b'AFS\x00', b'\x00\x06\x00\x00', b'MWo3'):
+            data = iso.read(f)
+            items = [(0, len(data))] if data[:4] == b'MWo3' else ps2kit.entradas_empacotadas(data)
+            for index, (offset, size) in enumerate(items):
+                blob = data[offset:offset + size]
+                ov = ps2kit.overlay_mwo3(blob)
+                if ov:
+                    ov['arquivo'] = f['path']
+                    overlays.setdefault(ov['nome'], ov)
+                elif blob[:4] == b'\x7fELF' and len(blob) > 52 and struct.unpack_from('<H', blob, 16)[0] in ps2kit.ET_IRX:
+                    modules.append(('pacote', '%s#%d' % (f['path'], index), blob))
+    out['overlays'] = sorted(overlays.values(), key=lambda o: (o['endereco'], o['nome']))
     info = []
     exports = {}
     imports = {}
@@ -138,8 +152,8 @@ def analisar(iso_path, engine_dir):
             if not p.lower().startswith('rom0:'):
                 continue
             name = re.split(r'[\\/:]', p)[-1].split(';')[0].upper()
-            if name in ('ROMVER', 'OSDSYS') or '.' in name:
-                continue
+            if name in ('ROMVER', 'OSDSYS', 'UDNL') or '.' in name:
+                continue  # UDNL é o reinício do IOP com uma imagem IOPRP, que a máquina já trata
             previsao['rom0'].append({'modulo': name, 'tem_copia_no_disco': name in disc_names or name in disc_files})
     out['previsao'] = previsao
 
@@ -203,6 +217,17 @@ def texto(r):
         add('DRIVERS DO IOP (o segundo processador, que cuida de som, controle, disco e memory card)')
         for m in mods:
             add('  %-6s %-34s %s %s' % (m['origem'], m['caminho'][-34:], m.get('nome') or '?', m.get('versao') or ''))
+    ovs = r.get('overlays') or []
+    if ovs:
+        enderecos = {}
+        for o in ovs:
+            enderecos.setdefault(o['endereco'], []).append(o['nome'])
+        add('')
+        add('CÓDIGO EM OVERLAYS: %d pedaços (%s) que o jogo carrega por cima um do outro' % (
+            len(ovs), tamanho(sum(o['codigo'] for o in ovs))))
+        for at, names in sorted(enderecos.items()):
+            add('  0x%08X  %s' % (at, ', '.join(names)))
+        add('  Sem suporte a overlays MWo3, a máquina trava no primeiro deles (patches/0002 resolve).')
     if r.get('caminhos_no_executavel'):
         add('')
         add('O EXECUTÁVEL CITA ESTES ARQUIVOS DE MÓDULO')

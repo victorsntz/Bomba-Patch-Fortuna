@@ -1,0 +1,100 @@
+diff --git a/recomp/analysis.cpp b/recomp/analysis.cpp
+index e2f2580..acd0a92 100644
+--- a/recomp/analysis.cpp
++++ b/recomp/analysis.cpp
+@@ -189,9 +189,9 @@ Program analyse(const Image &image, const std::vector<std::uint32_t> &extra_entr
+     p.dynamic = dynamic;
+     p.base = UINT32_MAX;
+     for (const auto &segment : image.segments()) {
+-        if (!segment.executable) continue;
++        if (!segment.executable || !segment.code_bytes) continue;
+         p.base = std::min(p.base, segment.address & ~3u);
+-        p.end = std::max<std::uint32_t>(p.end, segment.address + static_cast<std::uint32_t>(segment.bytes.size()));
++        p.end = std::max<std::uint32_t>(p.end, segment.address + segment.code_bytes);
+     }
+     p.end &= ~3u;
+     p.code.assign((p.end - p.base) >> 2, 0);
+diff --git a/recomp/elf.cpp b/recomp/elf.cpp
+index d46fd36..ef5ad1b 100644
+--- a/recomp/elf.cpp
++++ b/recomp/elf.cpp
+@@ -1,5 +1,6 @@
+ #include "elf.hpp"
+ 
++#include <algorithm>
+ #include <cstring>
+ #include <fstream>
+ #include <iterator>
+@@ -40,7 +41,7 @@ Image Image::load(const std::string &path) {
+         const auto filesz = read<std::uint32_t>(data, ph + 16), memsz = read<std::uint32_t>(data, ph + 20);
+         const auto flags = read<std::uint32_t>(data, ph + 24);
+         if (offset + filesz > data.size()) throw std::runtime_error("segment outside the file");
+-        Segment segment{vaddr, std::vector<std::uint8_t>(memsz), (flags & 1u) != 0};
++        Segment segment{vaddr, std::vector<std::uint8_t>(memsz), (flags & 1u) != 0, (flags & 1u) ? filesz : 0u};
+         std::memcpy(segment.bytes.data(), data.data() + offset, filesz);
+         image.segments_.push_back(std::move(segment));
+     }
+@@ -68,9 +69,11 @@ Image Image::load(const std::string &path) {
+     return image;
+ }
+ 
+-Image Image::raw(std::uint32_t address, std::vector<std::uint8_t> bytes, std::pair<std::uint32_t, std::uint32_t> text) {
++Image Image::raw(std::uint32_t address, std::vector<std::uint8_t> bytes, std::pair<std::uint32_t, std::uint32_t> text,
++                 std::uint32_t code_limit) {
+     Image image;
+-    image.segments_.push_back(Segment{address, std::move(bytes), true});
++    const auto size = std::min(static_cast<std::uint32_t>(bytes.size()), code_limit);
++    image.segments_.push_back(Segment{address, std::move(bytes), true, size});
+     image.text_ = text;
+     return image;
+ }
+@@ -88,7 +91,7 @@ std::optional<std::uint32_t> Image::word(std::uint32_t address) const {
+ 
+ bool Image::executable(std::uint32_t address) const {
+     for (const auto &segment : segments_)
+-        if (segment.executable && address >= segment.address && address - segment.address < segment.bytes.size())
++        if (segment.executable && address >= segment.address && address - segment.address < segment.code_bytes)
+             return true;
+     return false;
+ }
+diff --git a/recomp/elf.hpp b/recomp/elf.hpp
+index 23c398f..52684f0 100644
+--- a/recomp/elf.hpp
++++ b/recomp/elf.hpp
+@@ -13,12 +13,16 @@ struct Segment {
+     std::uint32_t address{};
+     std::vector<std::uint8_t> bytes;
+     bool executable{};
++    // bytes that came from the file; the zero-filled rest (bss, or room reserved for overlays) is never code
++    std::uint32_t code_bytes{};
+ };
+ 
+ class Image {
+ public:
+     static Image load(const std::string &path);
+-    static Image raw(std::uint32_t address, std::vector<std::uint8_t> bytes, std::pair<std::uint32_t, std::uint32_t> text);
++    // code_limit: how many leading bytes may hold code (all of them unless given)
++    static Image raw(std::uint32_t address, std::vector<std::uint8_t> bytes, std::pair<std::uint32_t, std::uint32_t> text,
++                     std::uint32_t code_limit = UINT32_MAX);
+ 
+     std::uint32_t entry() const { return entry_; }
+     const std::vector<Segment> &segments() const { return segments_; }
+diff --git a/runtime/src/system.cpp b/runtime/src/system.cpp
+index ca8f06c..38def2d 100644
+--- a/runtime/src/system.cpp
++++ b/runtime/src/system.cpp
+@@ -319,7 +319,13 @@ bool load_elf(const std::string &path, std::uint32_t &entry) {
+         const std::size_t ph = phoff + i * u16(42);
+         if (u32(ph) != 1) continue;
+         const std::uint32_t offset = u32(ph + 4), vaddr = physical(u32(ph + 8)), filesz = u32(ph + 16), memsz = u32(ph + 20);
+-        if (vaddr + memsz > kRamSize || offset + filesz > data.size()) return false;
++        if (offset + filesz > data.size()) return false;
++        if (vaddr + memsz > kRamSize) {
++            // some retail executables still declare empty segments for devkit memory above 32 MiB
++            if (filesz) return false;
++            std::fprintf(stderr, "[ee] empty segment at 0x%08X lies beyond RAM, skipped\n", vaddr);
++            continue;
++        }
+         std::memcpy(g_ram + vaddr, data.data() + offset, filesz);
+         std::memset(g_ram + vaddr + filesz, 0, memsz - filesz);
+     }
