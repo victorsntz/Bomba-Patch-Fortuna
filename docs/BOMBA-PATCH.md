@@ -60,6 +60,17 @@ Quem divide endereço com quem:
 despachante descobre qual está na memória olhando cabeçalho, número, nome e
 algumas palavras de código.
 
+Dois detalhes que a primeira versão do conserto deixou passar:
+
+- o executável e os overlays se chamam por `jal` com endereço absoluto. Olhando
+  um arquivo de cada vez, o tradutor não via as ~1.800 funções do executável
+  que só os overlays chamam, e o jogo parava a cada uma. Agora todas as
+  chamadas cruzadas viram ponto de entrada já na primeira passada (no sentido
+  executável → overlay, só onde o overlay realmente abre uma função, porque
+  outros overlays ocupam o mesmo endereço).
+- o Metrowerks alinha cada função em 16 bytes com zeros depois do `jr ra`; a
+  regra de "início de função" precisa pular esse enchimento.
+
 ## Achado 2: 39 terrenos, quase todos vazios
 
 O executável declara 39 segmentos de memória. 38 vêm sem nenhum byte: são o
@@ -88,4 +99,5 @@ O raio-x ainda aponta funções que esses drivers importam e a máquina não tem
 | --- | --- |
 | 1 | carregador recusou o executável (segmento em `0x03000000`) |
 | 2 | reiniciou o IOP, carregou os 12 drivers, leu `ROMLIST.DIR`, abriu os AFS e parou em `0x008CC320`, dentro do `bootset.ovl` |
-| 3 | com suporte a overlays: em andamento |
+| 3 | com suporte a overlays: entrou no `bootset.ovl` (a checagem do memory card) e foi parando em funções do executável que só os overlays chamam, uma por rodada |
+| 4 | com as chamadas cruzadas: em andamento |
