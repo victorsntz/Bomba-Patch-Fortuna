@@ -1,0 +1,19 @@
+# a máquina de tradução e tudo o que ela gera ficam só no seu computador
+engine/
+ferramentas/
+relatorios/
+
+# discos e cérebros de jogos NUNCA vão para o GitHub
+*.iso
+*.ISO
+*.7z
+*.zip
+!disco-teste/fortuna-teste.iso
+
+# sobras de compilar o disco de teste
+disco-teste/*.elf
+disco-teste/*.o
+
+__pycache__/
+*.pyc
+.DS_Store

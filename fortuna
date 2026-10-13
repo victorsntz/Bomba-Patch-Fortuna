@@ -1,0 +1,366 @@
+#!/usr/bin/env bash
+# Bomba Patch Fortuna: traduz um jogo de PS2 que você tem para rodar no navegador.
+# Rode ./fortuna sem nada para ver os comandos.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+ENGINE="$ROOT/engine"
+TOOLS="$ROOT/tools"
+# shellcheck source=UPSTREAM.lock
+source "$ROOT/UPSTREAM.lock"
+PY=(python3 -I)
+
+ajuda() {
+  cat <<'EOF'
+Bomba Patch Fortuna
+
+  ./fortuna preparar [--sem-web] [--ghidra]
+        baixa a máquina de tradução na versão certa e compila. Faz uma vez só.
+        --ghidra também baixa o Ghidra (precisa de Java 21) para o investigar
+  ./fortuna teste
+        roda o Disco de Teste Fortuna do começo ao fim. Prova que o seu
+        computador dá conta antes de gastar tempo com o jogo de verdade
+  ./fortuna raio-x <jogo.iso | cerebro.zip>
+        olha o disco sem rodar nada e prevê o que vai faltar na máquina
+  ./fortuna cerebro <jogo.iso>
+        separa num zip de ~10 MB só o que a engenharia reversa precisa
+  ./fortuna portar <nome> <jogo.iso> [--frames N] [--press QUADRO:BOTAO] ...
+        traduz o jogo, roda sem tela para achar código escondido e gera a página
+  ./fortuna diagnostico <nome>
+        explica em português a última rodada: onde parou, o que faltou, prints
+  ./fortuna investigar <nome | arquivo> <endereço> [endereço...]
+        abre o código do jogo naquele ponto (REA quando ele aceitar, senão Ghidra)
+  ./fortuna rea <nome | arquivo>
+        roda o REA no executável e nos drivers e guarda o que ele conseguiu ver
+  ./fortuna jogar <nome>
+        abre o jogo traduzido em http://localhost:8620 (outra porta: FORTUNA_PORTA=9000)
+
+  Exemplo com o Bomba Patch:
+    ./fortuna preparar
+    ./fortuna raio-x ~/Downloads/bomba.iso
+    ./fortuna portar bomba ~/Downloads/bomba.iso
+    ./fortuna jogar bomba
+
+A ISO e tudo o que é gerado a partir dela ficam só no seu computador.
+EOF
+}
+
+falha() { printf 'fortuna: %s\n' "$*" >&2; exit 1; }
+passo() { printf '\n\033[1;33m== %s\033[0m\n' "$*"; }
+
+# ------------------------------------------------------------------ Docker
+
+precisa_docker() {
+  [ "${FORTUNA_SEM_DOCKER:-}" = 1 ] && return 1
+  [ "${FORTUNA_DOCKER:-}" = 1 ] && return 0
+  # a máquina de tradução só foi testada em Linux x86-64; no resto, o Docker faz esse papel
+  [ "$(uname -s)" = Linux ] && [ "$(uname -m)" = x86_64 ] && return 1
+  return 0
+}
+
+no_docker() {
+  command -v docker > /dev/null || falha "neste sistema o kit roda dentro do Docker. Instale o Docker Desktop (https://www.docker.com/products/docker-desktop) e tente de novo. No Windows, outra saída é usar o WSL2 com Ubuntu."
+  local alvo=base
+  case "${1:-}" in investigar|rea) alvo=investigacao ;; esac
+  local tag="bomba-patch-fortuna:$alvo-$(cksum < "$ROOT/docker/Dockerfile" | cut -d' ' -f1)"
+  local plataforma=(--platform linux/amd64)
+  if ! docker image inspect "$tag" > /dev/null 2>&1; then
+    passo "montando a imagem Docker ($alvo). Só na primeira vez, demora uns minutos"
+    docker build "${plataforma[@]}" --target "$alvo" -t "$tag" "$ROOT/docker"
+  fi
+  local volumes=(-v "$ROOT:$ROOT" -w "$ROOT")
+  local args=()
+  for a in "$@"; do
+    # discos fora da pasta do kit entram no contêiner no mesmo caminho, só para leitura
+    if [ -f "$a" ] && case "$a" in *.iso|*.ISO|*.zip|*.ZIP|*.7z|*.7Z) true ;; *) false ;; esac; then
+      local abs dir
+      abs="$(cd "$(dirname "$a")" && pwd)/$(basename "$a")"
+      dir="$(dirname "$abs")"
+      case "$dir/" in "$ROOT"/*) ;; *) volumes+=(-v "$dir:$dir:ro") ;; esac
+      a="$abs"
+    fi
+    args+=("$a")
+  done
+  if [ "${1:-}" = jogar ] && [ -n "${2:-}" ] && [ -L "$ENGINE/games/$2/disc.iso" ]; then
+    local disco
+    disco="$(readlink "$ENGINE/games/$2/disc.iso")"
+    case "$(dirname "$disco")/" in "$ROOT"/*) ;; *) volumes+=(-v "$(dirname "$disco"):$(dirname "$disco"):ro") ;; esac
+  fi
+  local porta=()
+  [ "${1:-}" = jogar ] && porta=(-p "127.0.0.1:${FORTUNA_PORTA:-8620}:${FORTUNA_PORTA:-8620}")
+  exec docker run --rm -it "${plataforma[@]}" "${volumes[@]}" "${porta[@]}" -e FORTUNA_SEM_DOCKER=1 -e FORTUNA_NO_CONTEINER=1 \
+    "$tag" ./fortuna "${args[@]}"
+}
+
+# ------------------------------------------------------------------ peças
+
+aplicar_cara() {
+  # a página do jogo com a cara Fortuna e os consertos que a gente fez no motor
+  cp "$ROOT/overlay/web/shell.html" "$ENGINE/web/shell.html"
+  local p
+  for p in "$ROOT"/patches/*.patch; do
+    [ -e "$p" ] || continue
+    if git -C "$ENGINE" apply --reverse --check "$p" 2> /dev/null; then
+      continue
+    fi
+    git -C "$ENGINE" apply "$p" || falha "o conserto $(basename "$p") não encaixa no motor. Rode ./fortuna preparar --do-zero"
+    echo "conserto aplicado: $(basename "$p")"
+  done
+}
+
+preparar() {
+  local web=1 ghidra=0 zero=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --sem-web) web=0 ;;
+      --ghidra) ghidra=1 ;;
+      --do-zero) zero=1 ;;
+      *) falha "opção desconhecida: $1" ;;
+    esac
+    shift
+  done
+  passo "máquina de tradução ($ENGINE_REPO @ ${ENGINE_COMMIT:0:10})"
+  if [ ! -d "$ENGINE/.git" ]; then
+    git clone "$ENGINE_REPO" "$ENGINE"
+  fi
+  if [ "$(git -C "$ENGINE" rev-parse HEAD)" != "$ENGINE_COMMIT" ] || [ "$zero" = 1 ]; then
+    git -C "$ENGINE" fetch -q origin || true
+    git -C "$ENGINE" checkout -q -f "$ENGINE_COMMIT"
+  fi
+  if [ "$zero" = 1 ]; then git -C "$ENGINE" checkout -q -f -- .; fi
+  aplicar_cara
+  local opcoes=()
+  [ "$web" = 1 ] || opcoes=(--native-only)
+  "$ENGINE/scripts/setup.sh" "${opcoes[@]}"
+  if [ "$ghidra" = 1 ]; then baixar_ghidra; fi
+  passo "pronto. Próximo passo: ./fortuna teste"
+}
+
+baixar_ghidra() {
+  local destino="$ROOT/ferramentas"
+  [ -d "$destino/ghidra_${GHIDRA_VERSION}_PUBLIC" ] && return 0
+  command -v java > /dev/null || falha "o Ghidra precisa do Java 21 (JDK). Instale e rode de novo."
+  passo "baixando o Ghidra $GHIDRA_VERSION"
+  mkdir -p "$destino"
+  curl -L --fail -o "$destino/ghidra.zip" "$GHIDRA_ZIP"
+  (cd "$destino" && unzip -q ghidra.zip && rm ghidra.zip)
+}
+
+ghidra_dir() {
+  if [ -n "${GHIDRA_INSTALL_DIR:-}" ] && [ -x "$GHIDRA_INSTALL_DIR/support/analyzeHeadless" ]; then
+    echo "$GHIDRA_INSTALL_DIR"
+  elif [ -x "$ROOT/ferramentas/ghidra_${GHIDRA_VERSION}_PUBLIC/support/analyzeHeadless" ]; then
+    echo "$ROOT/ferramentas/ghidra_${GHIDRA_VERSION}_PUBLIC"
+  else
+    return 1
+  fi
+}
+
+rea_cmd() {
+  if command -v rea > /dev/null; then echo rea
+  elif command -v npx > /dev/null; then echo "npx -y rea-agents@$REA_VERSION"
+  else return 1
+  fi
+}
+
+garantir_motor() {
+  [ -x "$ENGINE/build/tools/eerecomp" ] || preparar "$@"
+  aplicar_cara
+}
+
+# devolve o caminho do executável do jogo a partir de um nome já portado, um ELF, uma ISO ou um cérebro
+executavel_de() {
+  local alvo="$1"
+  if [ -f "$alvo" ]; then
+    case "$alvo" in
+      *.iso|*.ISO|*.zip|*.ZIP)
+        local pasta="$ROOT/relatorios/$(basename "${alvo%.*}")"
+        mkdir -p "$pasta"
+        "${PY[@]}" - "$TOOLS" "$alvo" "$pasta" <<'EOF'
+import os, sys, zipfile
+sys.path.insert(0, sys.argv[1])
+import ps2kit
+source, folder = sys.argv[2], sys.argv[3]
+if source.lower().endswith('.zip'):
+    with zipfile.ZipFile(source) as z:
+        cnf = next(n for n in z.namelist() if n.upper() == 'SYSTEM.CNF')
+        program = ps2kit.nome_do_boot(ps2kit.ler_system_cnf(z.read(cnf).decode('ascii', 'replace')).get('BOOT2', ''))[0]
+        name = next(n for n in z.namelist() if n.upper() == program.upper())
+        data = z.read(name)
+else:
+    iso = ps2kit.Iso(source)
+    program = ps2kit.nome_do_boot(ps2kit.ler_system_cnf(iso.read(iso.find('SYSTEM.CNF')).decode('ascii', 'replace')).get('BOOT2', ''))[0]
+    data = iso.read(iso.find(program))
+path = os.path.join(folder, program)
+open(path, 'wb').write(data)
+print(path)
+EOF
+        ;;
+      *) echo "$alvo" ;;
+    esac
+    return
+  fi
+  local jogo="$ENGINE/games/$alvo"
+  [ -d "$jogo" ] || falha "não conheço o jogo '$alvo'. Rode ./fortuna portar $alvo <jogo.iso> antes, ou passe o caminho de um arquivo."
+  if [ -f "$jogo/core.elf" ]; then echo "$jogo/core.elf"; return; fi
+  local boot
+  boot=$(sed -n 's/^BOOT2 *= *//p' "$jogo/disc/SYSTEM.CNF" | tr -d '\r')
+  boot=${boot##*\\}
+  echo "$jogo/disc/${boot%;*}"
+}
+
+# ------------------------------------------------------------------ comandos
+
+portar() {
+  [ $# -ge 2 ] || falha "uso: ./fortuna portar <nome> <jogo.iso> [opções]"
+  local nome="$1" iso="$2"
+  shift 2
+  [ -f "$iso" ] || falha "não achei a ISO $iso"
+  case "$nome" in *[!a-z0-9-]*|'') falha "use um nome curto, só letras minúsculas, números e hífen (ex.: bomba)" ;; esac
+  garantir_motor
+  local extra=("$@")
+  # o PES passa por logos, vídeo de abertura e checagem de memory card antes do menu: 90 segundos por rodada
+  case " ${extra[*]:-} " in *" --frames "*) ;; *) extra+=(--frames 5400) ;; esac
+  passo "portando $nome"
+  "$ENGINE/scripts/port.sh" "$nome" "$(cd "$(dirname "$iso")" && pwd)/$(basename "$iso")" "${extra[@]}" || true
+  passo "diagnóstico"
+  "${PY[@]}" "$TOOLS/diagnostico.py" "$nome" --engine "$ENGINE"
+  if [ -f "$ENGINE/build/web-$nome/ps2web.html" ]; then
+    echo "Página pronta. Para jogar: ./fortuna jogar $nome"
+  fi
+}
+
+teste() {
+  local iso="$ROOT/disco-teste/fortuna-teste.iso"
+  [ -f "$iso" ] || falha "não achei $iso"
+  "${PY[@]}" "$TOOLS/raio_x.py" "$iso" --engine "$ENGINE" || true
+  portar fortuna-teste "$iso" --frames 900 --rounds 2 --press 400:right:200 --press 700:up+cross:40
+  echo
+  echo "Se o relatório acima mostra 'rodou até o fim do teste', está tudo certo."
+  echo "Veja os prints em relatorios/fortuna-teste/ e jogue com: ./fortuna jogar fortuna-teste"
+}
+
+investigar() {
+  [ $# -ge 2 ] || falha "uso: ./fortuna investigar <nome | arquivo> <endereço> [endereço...]"
+  local elf saida pasta
+  elf="$(executavel_de "$1")"
+  shift
+  [ -f "$elf" ] || falha "não achei o executável $elf"
+  case "$elf" in "$ENGINE"/games/*) pasta="$ROOT/relatorios/$(basename "$(dirname "$(dirname "$elf")")")" ;; *) pasta="$(dirname "$elf")" ;; esac
+  mkdir -p "$pasta"
+  saida="$pasta/investigacao-$(echo "$*" | tr ' ' '_').md"
+
+  local rea
+  if rea="$(rea_cmd)" && ghidra_dir > /dev/null; then
+    passo "perguntando ao REA"
+    local resposta
+    resposta="$(GHIDRA_INSTALL_DIR="$(ghidra_dir)" $rea decompile "$elf" "$1" --provider ghidra --json 2>&1 || true)"
+    if echo "$resposta" | grep -q '"architecture_unsupported"'; then
+      echo "O REA $REA_VERSION ainda não aceita o processador do PS2 (R5900). Usando o Ghidra direto, que é o mesmo motor que o REA usa por baixo."
+    elif echo "$resposta" | grep -q '"error"'; then
+      echo "O REA não conseguiu: $(echo "$resposta" | head -c 300)"
+    else
+      echo "$resposta" > "${saida%.md}.rea.json"
+      echo "O REA respondeu. Resultado em ${saida%.md}.rea.json"
+    fi
+  fi
+
+  local ghidra
+  ghidra="$(ghidra_dir)" || falha "falta o Ghidra. Rode ./fortuna preparar --ghidra (precisa de Java 21) ou defina GHIDRA_INSTALL_DIR."
+  passo "abrindo o código no Ghidra (a primeira vez analisa o executável inteiro e demora)"
+  local projeto="$pasta/ghidra"
+  mkdir -p "$projeto"
+  local nome_elf
+  nome_elf="$(basename "$elf")"
+  local acao=(-import "$elf")
+  [ -d "$projeto/fortuna.rep" ] && [ -f "$projeto/.importado-$nome_elf" ] && acao=(-process "$nome_elf" -noanalysis)
+  "$ghidra/support/analyzeHeadless" "$projeto" fortuna "${acao[@]}" \
+    -scriptPath "$TOOLS/ghidra" -postScript Investigar.java "$saida" "$@" > "$projeto/ultimo.log" 2>&1 \
+    || { tail -20 "$projeto/ultimo.log"; falha "o Ghidra falhou, log em $projeto/ultimo.log"; }
+  touch "$projeto/.importado-$nome_elf"
+  echo "Relatório: ${saida#$ROOT/}"
+}
+
+rea_relatorio() {
+  [ $# -ge 1 ] || falha "uso: ./fortuna rea <nome | arquivo>"
+  local rea elf pasta
+  rea="$(rea_cmd)" || falha "o REA precisa do Node.js 22 ou mais novo (https://nodejs.org)."
+  elf="$(executavel_de "$1")"
+  pasta="$(dirname "$elf")"
+  case "$elf" in "$ENGINE"/games/*) pasta="$ROOT/relatorios/$1" ;; esac
+  mkdir -p "$pasta"
+  passo "REA: inventário do executável e dos drivers"
+  local alvos=("$elf")
+  local irx
+  while IFS= read -r irx; do alvos+=("$irx"); done < <(find "$(dirname "$elf")" -maxdepth 3 -iname '*.irx' 2> /dev/null | sort)
+  local relatorio="$pasta/rea.md"
+  {
+    echo "# O que o REA $REA_VERSION viu"
+    echo
+    echo "| arquivo | formato | sha256 |"
+    echo "| --- | --- | --- |"
+  } > "$relatorio"
+  local a
+  for a in "${alvos[@]}"; do
+    $rea inspect-artifact "$a" --json > "$pasta/rea-$(basename "$a").json" 2>&1 || true
+    "${PY[@]}" - "$pasta/rea-$(basename "$a").json" "$(basename "$a")" >> "$relatorio" <<'EOF'
+import json, sys
+try:
+    subject = json.load(open(sys.argv[1]))['subject']
+    print('| %s | %s | `%s` |' % (sys.argv[2], subject.get('format'), subject['digest']['sha256']))
+except Exception as e:
+    print('| %s | (REA recusou: %s) | |' % (sys.argv[2], str(e)[:60]))
+EOF
+  done
+  if ghidra_dir > /dev/null; then
+    local resposta
+    resposta="$(GHIDRA_INSTALL_DIR="$(ghidra_dir)" $rea inspect "$elf" --provider ghidra --json 2>&1 || true)"
+    {
+      echo
+      echo "## Análise profunda (Ghidra pelo REA)"
+      echo
+      if echo "$resposta" | grep -q '"architecture_unsupported"'; then
+        echo "Recusada: o REA ainda não tem perfil para o processador do PS2 (MIPS R5900)."
+        echo "Ele já tem um perfil assim para o PSP (docs/ghidra-psp.md no repositório do REA)."
+        echo "Enquanto o PS2 não chega, use ./fortuna investigar, que chama o Ghidra direto."
+      else
+        echo '```json'
+        echo "$resposta" | head -c 4000
+        echo
+        echo '```'
+      fi
+    } >> "$relatorio"
+  fi
+  echo "Relatório: ${relatorio#$ROOT/}"
+}
+
+jogar() {
+  [ $# -ge 1 ] || falha "uso: ./fortuna jogar <nome>"
+  local nome="$1"
+  local web="$ENGINE/build/web-$nome" disco="$ENGINE/games/$nome/disc.iso"
+  [ -f "$web/ps2web.html" ] || falha "não tem página para '$nome'. Rode ./fortuna portar $nome <jogo.iso> antes."
+  local host=127.0.0.1
+  [ "${FORTUNA_NO_CONTEINER:-}" = 1 ] && host=0.0.0.0
+  echo "Abra no Chrome ou no Edge. Teclado: setas, Z ✕, X ○, A □, S △, Enter start. Controle USB também funciona."
+  exec "${PY[@]}" "$TOOLS/servir.py" "$web" "$disco" --host "$host" --porta "${FORTUNA_PORTA:-8620}"
+}
+
+# ------------------------------------------------------------------ entrada
+
+comando="${1:-}"
+[ -n "$comando" ] || { ajuda; exit 0; }
+case "$comando" in -h|--help|ajuda) ajuda; exit 0 ;; esac
+if precisa_docker; then no_docker "$@"; fi
+shift
+case "$comando" in
+  preparar) preparar "$@" ;;
+  teste) teste ;;
+  raio-x|raiox) [ $# -ge 1 ] || falha "uso: ./fortuna raio-x <jogo.iso>"; "${PY[@]}" "$TOOLS/raio_x.py" "$1" --engine "$ENGINE" "${@:2}" ;;
+  cerebro|cérebro) [ $# -ge 1 ] || falha "uso: ./fortuna cerebro <jogo.iso>"; "${PY[@]}" "$TOOLS/cerebro.py" "$@" ;;
+  portar) portar "$@" ;;
+  diagnostico|diagnóstico) [ $# -ge 1 ] || falha "uso: ./fortuna diagnostico <nome>"; "${PY[@]}" "$TOOLS/diagnostico.py" "$1" --engine "$ENGINE" ;;
+  investigar) investigar "$@" ;;
+  rea) rea_relatorio "$@" ;;
+  jogar) jogar "$@" ;;
+  *) ajuda; falha "comando desconhecido: $comando" ;;
+esac
