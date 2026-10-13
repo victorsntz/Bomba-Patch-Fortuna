@@ -156,7 +156,7 @@ preparar() {
   [ "$web" = 1 ] || opcoes=(--native-only)
   "$ENGINE/scripts/setup.sh" "${opcoes[@]}"
   if [ "$ghidra" = 1 ]; then baixar_ghidra; fi
-  passo "pronto. Próximo passo: ./fortuna portar bomba <caminho da sua ISO>"
+  passo "pronto. Próximo passo: ./fortuna portar bomba"
 }
 
 baixar_ghidra() {
