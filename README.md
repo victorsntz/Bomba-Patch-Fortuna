@@ -27,7 +27,7 @@ git clone https://github.com/victorsntz/Bomba-Patch-Fortuna
 cd Bomba-Patch-Fortuna
 ./fortuna preparar                         # uma vez só, demora uns minutos
 ./fortuna raio-x ~/Downloads/bomba.iso     # olha o disco e prevê o que vai faltar
-./fortuna portar bomba ~/Downloads/bomba.iso
+./fortuna portar bomba                     # acha a ISO sozinho (ou passe o caminho)
 ./fortuna jogar bomba                      # abre o Chrome em http://localhost:8620
 ```
 

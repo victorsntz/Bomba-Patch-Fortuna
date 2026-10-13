@@ -24,8 +24,9 @@ Bomba Patch Fortuna
         olha o disco sem rodar nada e prevê o que vai faltar na máquina
   ./fortuna cerebro <jogo.iso>
         separa num zip de ~10 MB só o que a engenharia reversa precisa
-  ./fortuna portar <nome> <jogo.iso> [--completo] [--frames N] [--press QUADRO:BOTAO] ...
-        traduz o jogo e gera a página. Se o disco já foi mapeado no kit (jogos/<nome>),
+  ./fortuna portar <nome> [jogo.iso] [--completo] [--frames N] [--press QUADRO:BOTAO] ...
+        traduz o jogo e gera a página. Sem o caminho, procura a ISO em Downloads,
+        Mesa, Documentos e discos externos. Se o disco já foi mapeado no kit (jogos/<nome>),
         vai direto; senão, roda o jogo sem tela para achar código escondido.
         --completo força as rodadas mesmo com mapa
   ./fortuna diagnostico <nome>
@@ -104,6 +105,7 @@ no_docker() {
   [ "${1:-}" = jogar ] && porta=(-p "127.0.0.1:${FORTUNA_PORTA:-8620}:${FORTUNA_PORTA:-8620}")
   local terminal=()
   [ -t 0 ] && [ -t 1 ] && terminal=(-it)
+  export DOCKER_CLI_HINTS=false
   exec docker run --rm ${terminal[@]+"${terminal[@]}"} ${plataforma[@]+"${plataforma[@]}"} "${volumes[@]}" ${porta[@]+"${porta[@]}"} -e FORTUNA_SEM_DOCKER=1 -e FORTUNA_NO_CONTEINER=1 -e FORTUNA_PORTA="${FORTUNA_PORTA:-8620}" \
     "$tag" ./fortuna "${args[@]}"
 }
@@ -456,6 +458,52 @@ preparar_jogar() {
   abrir_navegador
 }
 
+# ------------------------------------------------------------------ ISO
+
+minusculas() { echo "$1" | tr '[:upper:]' '[:lower:]'; }
+
+# procura a ISO nos lugares de sempre quando o caminho não veio; a escolha sai no stdout, a conversa no stderr
+achar_iso() {
+  local lugares=() l f
+  for l in "$HOME/Downloads" "$HOME/Desktop" "$HOME/Documents" "$HOME/Área de Trabalho" "$HOME/Documentos" "$HOME/Transferências" /Volumes /media /mnt; do
+    [ -d "$l" ] && lugares+=("$l")
+  done
+  [ ${#lugares[@]} -gt 0 ] || falha "não sei onde procurar a ISO. Rode: ./fortuna portar bomba <caminho da sua ISO>"
+  echo "Procurando a ISO em: ${lugares[*]}" >&2
+  echo "(se o Mac perguntar se o Terminal pode ver essas pastas, pode deixar)" >&2
+  # mais de 500 MB: deixa de fora o disco de teste do kit e outras ISOs pequenas
+  local todas=() bomba=()
+  while IFS= read -r f; do
+    todas+=("$f")
+    case "$(minusculas "$(basename "$f")")" in *bomba*|*slpm*663*74*|*winning*|*pes*) bomba+=("$f") ;; esac
+  done < <(find "${lugares[@]}" -maxdepth 4 -type f -iname '*.iso' -size +500000k 2> /dev/null)
+  local opcoes=()
+  if [ ${#bomba[@]} -gt 0 ]; then opcoes=("${bomba[@]}")
+  elif [ ${#todas[@]} -gt 0 ]; then opcoes=("${todas[@]}")
+  fi
+  if [ ${#opcoes[@]} = 0 ]; then
+    local pacote
+    pacote=$(find "${lugares[@]}" -maxdepth 4 -type f \( -iname '*bomba*.zip' -o -iname '*bomba*.rar' -o -iname '*bomba*.7z' \) 2> /dev/null | head -1)
+    [ -z "$pacote" ] || falha "achei o Bomba Patch compactado em $pacote. Abra ele (dois cliques) para sair a .iso e rode de novo."
+    falha "não achei nenhuma ISO. Digite ./fortuna portar bomba e um espaço, arraste o arquivo da ISO do Finder para o Terminal e aperte Enter."
+  fi
+  if [ ${#opcoes[@]} = 1 ]; then
+    echo "Achei: ${opcoes[0]}" >&2
+    echo "${opcoes[0]}"
+    return
+  fi
+  echo "Achei mais de uma ISO:" >&2
+  local i=1
+  for f in "${opcoes[@]}"; do echo "  $i) $f" >&2; i=$((i + 1)); done
+  [ -t 0 ] || falha "escolha uma e rode: ./fortuna portar bomba <caminho da ISO>"
+  local escolha
+  printf 'Qual é o Bomba Patch? Digite o número e Enter: ' >&2
+  read -r escolha
+  case "$escolha" in ''|*[!0-9]*) falha "não entendi \"$escolha\". Rode de novo e digite só o número." ;; esac
+  [ "$escolha" -ge 1 ] && [ "$escolha" -le ${#opcoes[@]} ] || falha "não tem a opção $escolha."
+  echo "${opcoes[$((escolha - 1))]}"
+}
+
 # ------------------------------------------------------------------ checagem
 
 checar() {
@@ -503,6 +551,17 @@ comando="${1:-}"
 case "$comando" in -h|--help|ajuda) ajuda; exit 0 ;; esac
 case "$comando" in checar|checagem) checar "${@:2}"; exit 0 ;; esac
 if [ "$comando" = jogar ] && [ "${FORTUNA_NO_CONTEINER:-}" != 1 ]; then preparar_jogar "${2:-}"; fi
+if [ "$comando" = portar ] && [ "${FORTUNA_NO_CONTEINER:-}" != 1 ]; then
+  # aqui fora, antes do Docker: sem caminho da ISO, o kit procura ela sozinho
+  [ -n "${2:-}" ] || falha "uso: ./fortuna portar bomba <caminho da sua ISO> (ou só ./fortuna portar bomba, que eu procuro a ISO)"
+  case "${3:-}" in
+    ''|--*)
+      iso=$(achar_iso)
+      set -- "$1" "$2" "$iso" "${@:3}"
+      ;;
+    *) [ -f "$3" ] || falha "não achei a ISO em $3. Rode só ./fortuna portar $2 que eu procuro ela." ;;
+  esac
+fi
 if precisa_docker; then no_docker "$@"; fi
 shift
 case "$comando" in

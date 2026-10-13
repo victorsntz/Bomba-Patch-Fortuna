@@ -35,15 +35,19 @@ texto passando; é normal. Termina com "pronto".
 
 ## 4. Traduza o seu Bomba Patch
 
-Troque o caminho pelo da sua ISO (dica: digite `./fortuna portar bomba `, com
-espaço no fim, e arraste o arquivo da ISO do Finder para dentro do Terminal):
-
 ```bash
-./fortuna portar bomba ~/Downloads/BombaPatch.iso
+./fortuna portar bomba
 ```
 
+Ele procura a ISO sozinho em Downloads, Mesa, Documentos e discos externos
+(se o Mac perguntar se o Terminal pode ver essas pastas, deixe). Achando mais
+de uma, ele mostra a lista e você digita o número. Se preferir apontar você
+mesmo, digite `./fortuna portar bomba ` com espaço no fim, arraste a ISO do
+Finder para dentro do Terminal e aperte Enter.
+
 Ele reconhece o disco ("Disco reconhecido: Bomba Patch") e vai direto para a
-versão navegador. Essa é a parte demorada: uns 20 a 40 minutos.
+versão navegador. Essa é a parte demorada: uns 20 a 40 minutos. Acabou quando
+aparece "Página pronta".
 
 ## 5. Jogue
 
