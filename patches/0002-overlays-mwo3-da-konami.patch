@@ -495,10 +495,43 @@ index 474ecef..1333bfe 100644
          if not args.destination:
              parser.error('extract needs a destination folder')
 diff --git a/scripts/port.sh b/scripts/port.sh
-index 19920eb..7cb8eb6 100755
+index 19920eb..409834d 100755
 --- a/scripts/port.sh
 +++ b/scripts/port.sh
-@@ -98,7 +98,14 @@ if grep -q SNR2 "$elf"; then
+@@ -20,12 +20,15 @@ options:
+   --rounds N         exploring runs at most (default 8)
+   --no-explore       translate and build without running the game
+   --native-only      skip the browser build and the Emscripten SDK it needs
++  --web-only         skip the native runner and the exploring runs: translate with
++                     the entry points already in games/<name>/entries.txt and build
++                     only the page
+ EOF
+ }
+ 
+ [ $# -ge 2 ] || { usage; exit 2; }
+ name="$1"; source_path="$2"; shift 2
+-frames=3600; rounds=8; explore=1; web=1; presses=()
++frames=3600; rounds=8; explore=1; web=1; runner=1; presses=()
+ while [ $# -gt 0 ]; do
+   case "$1" in
+     --frames) frames="$2"; shift ;;
+@@ -33,6 +36,7 @@ while [ $# -gt 0 ]; do
+     --rounds) rounds="$2"; shift ;;
+     --no-explore) explore=0 ;;
+     --native-only) web=0 ;;
++    --web-only) runner=0; explore=0 ;;
+     -h|--help) usage; exit 0 ;;
+     *) echo "unknown option $1" >&2; exit 2 ;;
+   esac
+@@ -50,6 +54,7 @@ tools="$ROOT/build/tools"
+ export EMSDK="${EMSDK:-$ROOT/tools/emsdk}"
+ setup=()
+ [ "$web" = 1 ] || setup=(--native-only)
++[ "$runner" = 1 ] || setup=(--web-only)
+ if { [ "$web" = 1 ] && [ ! -f "$EMSDK/emsdk_env.sh" ]; } || [ ! -x "$tools/eerecomp" ] || [ ! -x "$tools/vurecomp" ]; then "$here/setup.sh" "${setup[@]}"; fi
+ mkdir -p "$game/disc" "$game/vu1" "$game/shots" "$generated"
+ 
+@@ -98,7 +103,14 @@ if grep -q SNR2 "$elf"; then
    modules=(--modules "$game/modules")
  fi
  
@@ -514,3 +547,20 @@ index 19920eb..7cb8eb6 100755
  
  echo "== [3/6] machine code to C++"
  touch "$game/entries.txt"
+@@ -153,7 +165,7 @@ else
+ fi
+ 
+ echo "== [6/6] builds"
+-build_native
++if [ "$runner" = 1 ]; then build_native; fi
+ if [ "$web" = 1 ]; then
+   "$here/build_web.sh" "$name" "$EMSDK"
+ fi
+@@ -162,4 +174,6 @@ if [ "$web" = 1 ]; then
+   printf 'Done. Serve it with:  python3 scripts/serve.py %q %q\n' "build/web-$name" "games/$name/disc.iso"
+   echo "and open http://localhost:8620/"
+ fi
+-printf 'Play it natively:  %q %q --disc %q --window\n' "build/native-$name/ps2run" "${elf#$ROOT/}" "games/$name/disc.iso"
++if [ "$runner" = 1 ]; then
++  printf 'Play it natively:  %q %q --disc %q --window\n' "build/native-$name/ps2run" "${elf#$ROOT/}" "games/$name/disc.iso"
++fi

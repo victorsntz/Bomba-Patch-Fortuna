@@ -18,3 +18,27 @@ index d15cfa8..9ce8246 100755
  unzip -o -q "$target/wgpu.zip" -d "$target"
  rm "$target/wgpu.zip"
  echo "wgpu-native $version in $target"
+diff --git a/scripts/setup.sh b/scripts/setup.sh
+index f467308..d728e33 100755
+--- a/scripts/setup.sh
++++ b/scripts/setup.sh
+@@ -3,8 +3,9 @@ set -euo pipefail
+ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ EMSDK="${EMSDK:-$ROOT/tools/emsdk}"
+ EMSDK_VERSION="6.0.11"
+-web=1
++web=1; native=1
+ [ "${1:-}" = "--native-only" ] && web=0
++[ "${1:-}" = "--web-only" ] && native=0
+ 
+ if [ "$web" = 1 ] && [ ! -f "$EMSDK/emsdk_env.sh" ]; then
+   echo "== installing the Emscripten SDK $EMSDK_VERSION into $EMSDK"
+@@ -14,7 +15,7 @@ if [ "$web" = 1 ] && [ ! -f "$EMSDK/emsdk_env.sh" ]; then
+   "$EMSDK/emsdk" activate "$EMSDK_VERSION"
+ fi
+ 
+-if [ ! -f "$ROOT/third_party/wgpu-native/lib/libwgpu_native.a" ]; then
++if [ "$native" = 1 ] && [ ! -f "$ROOT/third_party/wgpu-native/lib/libwgpu_native.a" ]; then
+   echo "== fetching wgpu-native for the native runner"
+   "$ROOT/scripts/fetch_wgpu.sh"
+ fi

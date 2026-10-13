@@ -24,8 +24,10 @@ Bomba Patch Fortuna
         olha o disco sem rodar nada e prevê o que vai faltar na máquina
   ./fortuna cerebro <jogo.iso>
         separa num zip de ~10 MB só o que a engenharia reversa precisa
-  ./fortuna portar <nome> <jogo.iso> [--frames N] [--press QUADRO:BOTAO] ...
-        traduz o jogo, roda sem tela para achar código escondido e gera a página
+  ./fortuna portar <nome> <jogo.iso> [--completo] [--frames N] [--press QUADRO:BOTAO] ...
+        traduz o jogo e gera a página. Se o disco já foi mapeado no kit (jogos/<nome>),
+        vai direto; senão, roda o jogo sem tela para achar código escondido.
+        --completo força as rodadas mesmo com mapa
   ./fortuna diagnostico <nome>
         explica em português a última rodada: onde parou, o que faltou, prints
   ./fortuna investigar <nome | arquivo> <endereço> [endereço...]
@@ -224,12 +226,45 @@ portar() {
   shift 2
   [ -f "$iso" ] || falha "não achei a ISO $iso"
   case "$nome" in *[!a-z0-9-]*|'') falha "use um nome curto, só letras minúsculas, números e hífen (ex.: bomba)" ;; esac
+  local completo=0 extra=()
+  for a in "$@"; do
+    if [ "$a" = --completo ]; then completo=1; else extra+=("$a"); fi
+  done
   garantir_motor
-  local extra=("$@")
+  local abs
+  abs="$(cd "$(dirname "$iso")" && pwd)/$(basename "$iso")"
+
+  # jogo já mapeado aqui no kit (jogos/<nome>): com o mesmo executável, pula as rodadas de exploração e vai direto
+  # para a página, o que dispensa o executor nativo e leva minutos em vez de meia hora
+  local mapa="$ROOT/jogos/$nome"
+  if [ "$completo" = 0 ] && [ -f "$mapa/entradas.txt" ] && [ -f "$mapa/jogo.txt" ]; then
+    local esperado achado
+    esperado=$(sed -n 's/^sha256=//p' "$mapa/jogo.txt")
+    achado=$("${PY[@]}" - "$TOOLS" "$abs" <<'PYEOF'
+import hashlib, sys
+sys.path.insert(0, sys.argv[1])
+import ps2kit
+iso = ps2kit.Iso(sys.argv[2])
+boot = ps2kit.ler_system_cnf(iso.read(iso.find('SYSTEM.CNF')).decode('ascii', 'replace')).get('BOOT2', '')
+print(hashlib.sha256(iso.read(iso.find(ps2kit.nome_do_boot(boot)[0]))).hexdigest())
+PYEOF
+)
+    if [ "$achado" = "$esperado" ]; then
+      echo "Disco reconhecido: $(sed -n 's/^nome=//p' "$mapa/jogo.txt"). Usando o mapa de código do kit."
+      mkdir -p "$ENGINE/games/$nome"
+      grep -v '^#' "$mapa/entradas.txt" | sort -u > "$ENGINE/games/$nome/entries.txt"
+      passo "portando $nome (direto para a página)"
+      "$ENGINE/scripts/port.sh" "$nome" "$abs" --web-only ${extra[@]+"${extra[@]}"}
+      echo "Página pronta. Para jogar: ./fortuna jogar $nome"
+      return
+    fi
+    echo "Esse disco não é o que está mapeado em jogos/$nome (executável diferente). Vou pela versão completa, com as rodadas de teste."
+  fi
+
   # o PES passa por logos, vídeo de abertura e checagem de memory card antes do menu: 90 segundos por rodada
   case " ${extra[*]:-} " in *" --frames "*) ;; *) extra+=(--frames 5400) ;; esac
   passo "portando $nome"
-  "$ENGINE/scripts/port.sh" "$nome" "$(cd "$(dirname "$iso")" && pwd)/$(basename "$iso")" "${extra[@]}" || true
+  "$ENGINE/scripts/port.sh" "$nome" "$abs" "${extra[@]}" || true
   passo "diagnóstico"
   "${PY[@]}" "$TOOLS/diagnostico.py" "$nome" --engine "$ENGINE"
   if [ -f "$ENGINE/build/web-$nome/ps2web.html" ]; then

@@ -1,0 +1,4 @@
+# Disco que este mapa descreve. O ./fortuna portar confere antes de usar.
+nome=Bomba Patch (base Winning Eleven 10 japonês)
+executavel=SLPM_663.74
+sha256=8ffbfdcbe30d0cda3de54a8fab9ea238bdbb44df10e5684d42b5c6a66b77ab6b

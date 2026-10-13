@@ -1,0 +1,17 @@
+# Endereços de entrada achados nas rodadas de teste do Bomba Patch (SLPM_663.74).
+# Só números: onde começam funções que a análise estática não vê sozinha.
+8cc320
+bootset:1320
+2ba130
+2c79a8
+1c3ea0
+memorycard:203e0
+title:ada0
+title:ad90
+104bf8
+title:5d30
+title:a1b0
+title:5b70
+title:a5a0
+select1:9e0
+select1:9d0
