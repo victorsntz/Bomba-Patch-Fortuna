@@ -1,0 +1,20 @@
+diff --git a/scripts/fetch_wgpu.sh b/scripts/fetch_wgpu.sh
+index d15cfa8..9ce8246 100755
+--- a/scripts/fetch_wgpu.sh
++++ b/scripts/fetch_wgpu.sh
+@@ -4,7 +4,14 @@ version=${1:-v29.0.1.1}
+ here=$(cd "$(dirname "$0")/.." && pwd)
+ target="$here/third_party/wgpu-native"
+ mkdir -p "$target"
+-curl -L -o "$target/wgpu.zip" "https://github.com/gfx-rs/wgpu-native/releases/download/$version/wgpu-linux-x86_64-release.zip"
++case "$(uname -s)-$(uname -m)" in
++  Linux-x86_64) build=linux-x86_64 ;;
++  Linux-aarch64|Linux-arm64) build=linux-aarch64 ;;
++  Darwin-arm64) build=macos-aarch64 ;;
++  Darwin-x86_64) build=macos-x86_64 ;;
++  *) echo "no wgpu-native build for $(uname -s) $(uname -m); the native runner will draw with the software renderer"; exit 0 ;;
++esac
++curl -L --fail -o "$target/wgpu.zip" "https://github.com/gfx-rs/wgpu-native/releases/download/$version/wgpu-$build-release.zip"
+ unzip -o -q "$target/wgpu.zip" -d "$target"
+ rm "$target/wgpu.zip"
+ echo "wgpu-native $version in $target"
