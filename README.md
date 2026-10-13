@@ -25,6 +25,9 @@ cd Bomba-Patch-Fortuna
 Abra no Chrome ou no Edge. Teclado: setas mexem, Z passa, X lança, A chuta,
 S enfia, W dispara, Enter é start. Controle USB também funciona.
 
+O Bomba Patch nasceu da versão japonesa do Winning Eleven, então nos menus é
+a **bolinha (○, tecla X)** que confirma e o **✕ (tecla Z)** que volta.
+
 ## De dois, com controle Bluetooth
 
 1. Pareie os controles no Mac: Ajustes do Sistema → Bluetooth (controle de PS4,
