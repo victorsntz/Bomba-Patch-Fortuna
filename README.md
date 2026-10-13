@@ -28,7 +28,8 @@ S enfia, W dispara, Enter é start. Controle USB também funciona.
 ## De dois, com controle Bluetooth
 
 1. Pareie os controles no Mac: Ajustes do Sistema → Bluetooth (controle de PS4,
-   PS5, Xbox ou Switch Pro). No PS4/PS5, segure **Share + PS** até a luz piscar.
+   PS5, Xbox ou Switch Pro). Para entrar em modo de pareamento, segure
+   **Share + PS** no controle de PS4 ou **Create + PS** no de PS5 até a luz piscar.
 2. Abra o jogo no Chrome ou no Edge (`./fortuna jogar bomba`).
 3. Aperte qualquer botão em cada controle. Por privacidade, o navegador só
    enxerga um controle depois que ele é usado na página.
