@@ -99,7 +99,7 @@ no_docker() {
   [ "${1:-}" = jogar ] && porta=(-p "127.0.0.1:${FORTUNA_PORTA:-8620}:${FORTUNA_PORTA:-8620}")
   local terminal=()
   [ -t 0 ] && [ -t 1 ] && terminal=(-it)
-  exec docker run --rm ${terminal[@]+"${terminal[@]}"} ${plataforma[@]+"${plataforma[@]}"} "${volumes[@]}" ${porta[@]+"${porta[@]}"} -e FORTUNA_SEM_DOCKER=1 -e FORTUNA_NO_CONTEINER=1 \
+  exec docker run --rm ${terminal[@]+"${terminal[@]}"} ${plataforma[@]+"${plataforma[@]}"} "${volumes[@]}" ${porta[@]+"${porta[@]}"} -e FORTUNA_SEM_DOCKER=1 -e FORTUNA_NO_CONTEINER=1 -e FORTUNA_PORTA="${FORTUNA_PORTA:-8620}" \
     "$tag" ./fortuna "${args[@]}"
 }
 
