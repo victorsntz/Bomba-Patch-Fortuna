@@ -69,13 +69,91 @@ LEGENDA = '''<dl class="teclas" aria-label="Controles no teclado">
     <dt>A · □</dt><dd>chute</dd><dt>S · △</dt><dd>enfiada</dd>
     <dt>W · R1</dt><dd>disparada</dd><dt>Q · L1</dt><dd>trocar jogador</dd>
     <dt>Enter</dt><dd>start</dd><dt>F</dt><dd>tela cheia</dd>
+    <dt>🎮 1</dt><dd>jogador 1</dd><dt>🎮 2</dt><dd>jogador 2</dd>
   </dl>'''
+
+# leitura dos controles para dois jogadores: teclado, toque e o primeiro controle são o jogador 1; o segundo controle
+# é o jogador 2, e a porta 2 do PS2 só liga quando ele aparece (precisa do patches/0004 no motor)
+CONTROLES_INICIO = "let lastPad = -1, lastPressure = '', lastStrong = 0, lastWeak = 0, rumbleAt = 0;"
+CONTROLES_FIM = '// some browsers cannot show a canvas'
+CONTROLES = r"""const portas = [0, 1].map(() => ({ ultimo: -1, pressao: '', forte: 0, fraco: 0, vibrouEm: 0 }));
+let segundoLigado = false;
+const motorStrength = (v) => v < 16 ? 0 : Math.sqrt(v / 255);
+window.addEventListener('gamepadconnected', (e) => {
+  const lista = navigator.getGamepads ? Array.from(navigator.getGamepads()).filter(Boolean) : [];
+  note(lista.length > 1 ? 'Controle 2 conectado: Jogador 2 em campo' : 'Controle conectado: Jogador 1 (' + e.gamepad.id.split('(')[0].trim() + ')');
+});
+function lerControle(pad, base) {
+  const s = { buttons: base.buttons, lx: base.lx, ly: base.ly, rx: 128, ry: 128, pressure: new Array(16).fill(255) };
+  for (const [index, bit] of padButtons) {
+    const b = pad.buttons[index];
+    if (!b || !(b.pressed || b.value > 0.05)) continue;
+    s.buttons |= 1 << bit;
+    if (!(base.buttons & (1 << bit))) s.pressure[bit] = Math.max(1, Math.round((b.value > 0 ? b.value : 1) * 255));
+  }
+  if (pad.axes.length >= 4) {
+    if (s.lx === 128) s.lx = axis(pad.axes[0]);
+    if (s.ly === 128) s.ly = axis(pad.axes[1]);
+    s.rx = axis(pad.axes[2]);
+    s.ry = axis(pad.axes[3]);
+  }
+  return s;
+}
+function enviar(porta, s, gamepad) {
+  const p = portas[porta];
+  const state = s.buttons + s.lx * 65536 + s.ly * 16777216 + s.rx * 4294967296 + s.ry * 1099511627776;
+  if (state !== p.ultimo) {
+    p.ultimo = state;
+    Module._ps2web_pad_at(porta, s.buttons, s.lx, s.ly, s.rx, s.ry);
+  }
+  const packed = [0, 1, 2, 3].map((i) => s.pressure[i * 4] | (s.pressure[i * 4 + 1] << 8) | (s.pressure[i * 4 + 2] << 16) | (s.pressure[i * 4 + 3] << 24));
+  if (packed.join() !== p.pressao) {
+    p.pressao = packed.join();
+    Module._ps2web_pressure_at(porta, packed[0], packed[1], packed[2], packed[3]);
+  }
+  const rumble = Module._ps2web_rumble_at(porta), now = performance.now();
+  const strong = motorStrength(rumble >> 8), weak = rumble & 1;
+  const actuator = gamepad && gamepad.vibrationActuator;
+  if (actuator && (Math.abs(strong - p.forte) > 0.08 || weak !== p.fraco || ((strong || weak) && now - p.vibrouEm > 100))) {
+    p.forte = strong;
+    p.fraco = weak;
+    p.vibrouEm = now;
+    const done = strong || weak ? actuator.playEffect('dual-rumble', { duration: 200, weakMagnitude: weak, strongMagnitude: strong }) : actuator.reset();
+    if (done && done.catch) done.catch(() => {});
+  }
+}
+function pollInput() {
+  let buttons = touchPad.buttons, lx = 128, ly = 128;
+  for (const k of keys) if (k in keyMap) buttons |= 1 << keyMap[k];
+  if (keys.has('KeyJ')) lx = 0;
+  if (keys.has('KeyL')) lx = 255;
+  if (keys.has('KeyI')) ly = 0;
+  if (keys.has('KeyK')) ly = 255;
+  if (touchPad.stick) {
+    lx = axis(touchPad.x);
+    ly = axis(touchPad.y);
+  }
+  const pads = navigator.getGamepads ? Array.from(navigator.getGamepads()).filter(Boolean) : [];
+  const jogador1 = pads[0] ? lerControle(pads[0], { buttons, lx, ly })
+                           : { buttons, lx, ly, rx: 128, ry: 128, pressure: new Array(16).fill(255) };
+  enviar(0, jogador1, pads[0]);
+  const querSegundo = pads.length > 1;
+  if (querSegundo !== segundoLigado) {
+    segundoLigado = querSegundo;
+    Module._ps2web_pad_connected(1, querSegundo ? 1 : 0);
+    if (!querSegundo) note('Controle 2 saiu: Jogador 2 no banco');
+  }
+  if (querSegundo) enviar(1, lerControle(pads[1], { buttons: 0, lx: 128, ly: 128 }), pads[1]);
+}
+
+"""
 
 TROCAS = [
     ('<html lang="en">', '<html lang="pt-BR">'),
     ('<title>ps2-web-recomp</title>', '<title>Bomba Patch Fortuna</title>\n<meta name="theme-color" content="#0a1f44">'),
     # o estilo inteiro até as regras dos controles de toque, que ficam como estão
     (None, None),
+    ('controles', None),
     ('<span id="status">Loading…</span>', '<span id="status">Aquecendo…</span>'),
     ('title="Internal resolution, the page reloads to apply it"', 'title="Resolução interna. A página recarrega para aplicar"'),
     ('aria-label="Resolution"', 'aria-label="Resolução"'),
@@ -136,6 +214,10 @@ def original():
 def main():
     html = original()
     for old, new in TROCAS:
+        if old == 'controles':
+            start, end = html.index(CONTROLES_INICIO), html.index(CONTROLES_FIM)
+            html = html[:start] + CONTROLES + html[end:]
+            continue
         if old is None:
             start = html.index('<style>')
             end = html.index('  .controls { display: none; }') + len('  .controls { display: none; }')

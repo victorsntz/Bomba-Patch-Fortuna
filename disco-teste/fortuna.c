@@ -18,7 +18,7 @@
 #include <dmaKit.h>
 #include <string.h>
 
-static char pad_area[256] __attribute__((aligned(64)));
+static char pad_area[2][256] __attribute__((aligned(64)));
 
 #define RGB(r, g, b) GS_SETREG_RGBAQ(r, g, b, 0x80, 0x00)
 
@@ -46,7 +46,7 @@ static const struct { char c; unsigned char rows[7]; } FONT[] = {
     {'4', {0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02}}, {'5', {0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E}},
     {'6', {0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E}}, {'7', {0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08}},
     {'8', {0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E}}, {'9', {0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C}},
-    {'!', {0x04, 0x04, 0x04, 0x04, 0x04, 0x00, 0x04}},
+    {'!', {0x04, 0x04, 0x04, 0x04, 0x04, 0x00, 0x04}}, {'J', {0x07, 0x02, 0x02, 0x02, 0x02, 0x12, 0x0C}},
 };
 
 static const unsigned char *glyph(char c)
@@ -111,7 +111,7 @@ static void ring(GSGLOBAL *gs, float cx, float cy, int r, int w, u64 color)
     }
 }
 
-static int pad_ready;
+static int pad_ready[2];
 
 static void start_pad(void)
 {
@@ -120,15 +120,20 @@ static void start_pad(void)
     int b = SifLoadModule("cdrom0:\\MODULES\\PADMAN.IRX;1", 0, NULL);
     if (a < 0 || b < 0) return;
     padInit(0);
-    pad_ready = padPortOpen(0, 0, pad_area) != 0;
+    for (int port = 0; port < 2; port++) pad_ready[port] = padPortOpen(port, 0, pad_area[port]) != 0;
 }
 
-static u32 read_pad(void)
+/* controle plugado e pronto naquela porta */
+static int pad_present(int port)
+{
+    return pad_ready[port] && padGetState(port, 0) == PAD_STATE_STABLE;
+}
+
+static u32 read_pad(int port)
 {
     struct padButtonStatus status;
-    if (!pad_ready) return 0;
-    if (padGetState(0, 0) != PAD_STATE_STABLE) return 0;
-    if (padRead(0, 0, &status) == 0) return 0;
+    if (!pad_present(port)) return 0;
+    if (padRead(port, 0, &status) == 0) return 0;
     /* tudo apertado ao mesmo tempo é leitura de controle ainda acordando, não jogada */
     if (status.btns == 0) return 0;
     return 0xffff ^ status.btns;
@@ -153,11 +158,22 @@ int main(void)
     const float goal_half = 40;
 
     float bx = mid_x, by = mid_y, vx = 2.6f, vy = 1.7f;
+    float p2x = mid_x + 60, p2y = mid_y;
     int home = 0, away = 0, celebrate = 0, manual = 0, frame = 0;
     char score[8];
 
     for (;;) {
-        u32 buttons = read_pad();
+        u32 buttons = read_pad(0);
+        u32 buttons2 = read_pad(1);
+        int two_players = pad_present(1);
+        if (buttons2 & PAD_LEFT) p2x -= 4;
+        if (buttons2 & PAD_RIGHT) p2x += 4;
+        if (buttons2 & PAD_UP) p2y -= 4;
+        if (buttons2 & PAD_DOWN) p2y += 4;
+        if (p2x < left + 8) p2x = left + 8;
+        if (p2x > right - 8) p2x = right - 8;
+        if (p2y < top + 8) p2y = top + 8;
+        if (p2y > bottom - 8) p2y = bottom - 8;
         if (buttons) manual = 1;
         if (manual) {
             vx = vy = 0;
@@ -203,11 +219,15 @@ int main(void)
         text(gs, "FORTUNA", 24, 12, 3, OURO);
         score[0] = '0' + home % 10; score[1] = ' '; score[2] = 'X'; score[3] = ' '; score[4] = '0' + away % 10; score[5] = 0;
         text(gs, score, (W - text_width(score, 3)) / 2, 12, 3, CAL);
-        const char *mode = manual ? "CONTROLE" : (pad_ready ? "AUTO" : "SEM PAD");
+        const char *mode = two_players ? "J1 J2" : manual ? "CONTROLE" : (pad_ready[0] ? "AUTO" : "SEM PAD");
         text(gs, mode, W - 24 - text_width(mode, 2), 17, 2, (frame / 30) & 1 ? CAL : OURO);
 
         disc(gs, bx + 2, by + 3, 8, RGB(0x05, 0x40, 0x22));
         disc(gs, bx, by, 8, CAL);
+        if (two_players) {
+            disc(gs, p2x + 2, p2y + 3, 8, RGB(0x05, 0x40, 0x22));
+            disc(gs, p2x, p2y, 8, OURO);
+        }
 
         if (celebrate) {
             celebrate--;

@@ -25,6 +25,18 @@ cd Bomba-Patch-Fortuna
 Abra no Chrome ou no Edge. Teclado: setas mexem, Z passa, X lança, A chuta,
 S enfia, W dispara, Enter é start. Controle USB também funciona.
 
+## De dois, com controle Bluetooth
+
+1. Pareie os controles no Mac: Ajustes do Sistema → Bluetooth (controle de PS4,
+   PS5, Xbox ou Switch Pro). No PS4/PS5, segure **Share + PS** até a luz piscar.
+2. Abra o jogo no Chrome ou no Edge (`./fortuna jogar bomba`).
+3. Aperte qualquer botão em cada controle. Por privacidade, o navegador só
+   enxerga um controle depois que ele é usado na página.
+
+O primeiro controle (e o teclado) é o Jogador 1. O segundo é o Jogador 2: a
+página avisa "Controle 2 conectado: Jogador 2 em campo" e liga a segunda porta
+do PS2 na hora.
+
 ## Se travar
 
 Vai travar na primeira tentativa, e tudo bem: a máquina de tradução só rodou

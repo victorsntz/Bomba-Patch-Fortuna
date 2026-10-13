@@ -161,6 +161,7 @@
     <dt>A · □</dt><dd>chute</dd><dt>S · △</dt><dd>enfiada</dd>
     <dt>W · R1</dt><dd>disparada</dd><dt>Q · L1</dt><dd>trocar jogador</dd>
     <dt>Enter</dt><dd>start</dd><dt>F</dt><dd>tela cheia</dd>
+    <dt>🎮 1</dt><dd>jogador 1</dd><dt>🎮 2</dt><dd>jogador 2</dd>
   </dl>
 </div></div>
 <script>
@@ -440,14 +441,55 @@ window.addEventListener('keyup', (e) => { keys.delete(e.code); });
 const padButtons = [[0, 14], [1, 13], [2, 15], [3, 12], [4, 10], [5, 11], [6, 8], [7, 9], [8, 0], [9, 3], [10, 1], [11, 2],
                     [12, 4], [13, 6], [14, 7], [15, 5]];
 const axis = (v) => Math.max(0, Math.min(255, Math.round((v + 1) * 127.5)));
-let lastPad = -1, lastPressure = '', lastStrong = 0, lastWeak = 0, rumbleAt = 0;
+const portas = [0, 1].map(() => ({ ultimo: -1, pressao: '', forte: 0, fraco: 0, vibrouEm: 0 }));
+let segundoLigado = false;
 const motorStrength = (v) => v < 16 ? 0 : Math.sqrt(v / 255);
+window.addEventListener('gamepadconnected', (e) => {
+  const lista = navigator.getGamepads ? Array.from(navigator.getGamepads()).filter(Boolean) : [];
+  note(lista.length > 1 ? 'Controle 2 conectado: Jogador 2 em campo' : 'Controle conectado: Jogador 1 (' + e.gamepad.id.split('(')[0].trim() + ')');
+});
+function lerControle(pad, base) {
+  const s = { buttons: base.buttons, lx: base.lx, ly: base.ly, rx: 128, ry: 128, pressure: new Array(16).fill(255) };
+  for (const [index, bit] of padButtons) {
+    const b = pad.buttons[index];
+    if (!b || !(b.pressed || b.value > 0.05)) continue;
+    s.buttons |= 1 << bit;
+    if (!(base.buttons & (1 << bit))) s.pressure[bit] = Math.max(1, Math.round((b.value > 0 ? b.value : 1) * 255));
+  }
+  if (pad.axes.length >= 4) {
+    if (s.lx === 128) s.lx = axis(pad.axes[0]);
+    if (s.ly === 128) s.ly = axis(pad.axes[1]);
+    s.rx = axis(pad.axes[2]);
+    s.ry = axis(pad.axes[3]);
+  }
+  return s;
+}
+function enviar(porta, s, gamepad) {
+  const p = portas[porta];
+  const state = s.buttons + s.lx * 65536 + s.ly * 16777216 + s.rx * 4294967296 + s.ry * 1099511627776;
+  if (state !== p.ultimo) {
+    p.ultimo = state;
+    Module._ps2web_pad_at(porta, s.buttons, s.lx, s.ly, s.rx, s.ry);
+  }
+  const packed = [0, 1, 2, 3].map((i) => s.pressure[i * 4] | (s.pressure[i * 4 + 1] << 8) | (s.pressure[i * 4 + 2] << 16) | (s.pressure[i * 4 + 3] << 24));
+  if (packed.join() !== p.pressao) {
+    p.pressao = packed.join();
+    Module._ps2web_pressure_at(porta, packed[0], packed[1], packed[2], packed[3]);
+  }
+  const rumble = Module._ps2web_rumble_at(porta), now = performance.now();
+  const strong = motorStrength(rumble >> 8), weak = rumble & 1;
+  const actuator = gamepad && gamepad.vibrationActuator;
+  if (actuator && (Math.abs(strong - p.forte) > 0.08 || weak !== p.fraco || ((strong || weak) && now - p.vibrouEm > 100))) {
+    p.forte = strong;
+    p.fraco = weak;
+    p.vibrouEm = now;
+    const done = strong || weak ? actuator.playEffect('dual-rumble', { duration: 200, weakMagnitude: weak, strongMagnitude: strong }) : actuator.reset();
+    if (done && done.catch) done.catch(() => {});
+  }
+}
 function pollInput() {
-  let buttons = 0, lx = 128, ly = 128, rx = 128, ry = 128, gamepad = null;
-  const pressure = new Array(16).fill(255);
-  buttons |= touchPad.buttons;
+  let buttons = touchPad.buttons, lx = 128, ly = 128;
   for (const k of keys) if (k in keyMap) buttons |= 1 << keyMap[k];
-  const full = buttons;
   if (keys.has('KeyJ')) lx = 0;
   if (keys.has('KeyL')) lx = 255;
   if (keys.has('KeyI')) ly = 0;
@@ -456,43 +498,17 @@ function pollInput() {
     lx = axis(touchPad.x);
     ly = axis(touchPad.y);
   }
-  for (const pad of navigator.getGamepads ? navigator.getGamepads() : []) {
-    if (!pad) continue;
-    gamepad = pad;
-    for (const [index, bit] of padButtons) {
-      const b = pad.buttons[index];
-      if (!b || !(b.pressed || b.value > 0.05)) continue;
-      buttons |= 1 << bit;
-      if (!(full & (1 << bit))) pressure[bit] = Math.max(1, Math.round((b.value > 0 ? b.value : 1) * 255));
-    }
-    if (pad.axes.length >= 4) {
-      if (lx === 128) lx = axis(pad.axes[0]);
-      if (ly === 128) ly = axis(pad.axes[1]);
-      rx = axis(pad.axes[2]);
-      ry = axis(pad.axes[3]);
-    }
-    break;
+  const pads = navigator.getGamepads ? Array.from(navigator.getGamepads()).filter(Boolean) : [];
+  const jogador1 = pads[0] ? lerControle(pads[0], { buttons, lx, ly })
+                           : { buttons, lx, ly, rx: 128, ry: 128, pressure: new Array(16).fill(255) };
+  enviar(0, jogador1, pads[0]);
+  const querSegundo = pads.length > 1;
+  if (querSegundo !== segundoLigado) {
+    segundoLigado = querSegundo;
+    Module._ps2web_pad_connected(1, querSegundo ? 1 : 0);
+    if (!querSegundo) note('Controle 2 saiu: Jogador 2 no banco');
   }
-  const state = buttons + lx * 65536 + ly * 16777216 + rx * 4294967296 + ry * 1099511627776;
-  if (state !== lastPad) {
-    lastPad = state;
-    Module._ps2web_pad(buttons, lx, ly, rx, ry);
-  }
-  const packed = [0, 1, 2, 3].map((i) => pressure[i * 4] | (pressure[i * 4 + 1] << 8) | (pressure[i * 4 + 2] << 16) | (pressure[i * 4 + 3] << 24));
-  if (packed.join() !== lastPressure) {
-    lastPressure = packed.join();
-    Module._ps2web_pressure(packed[0], packed[1], packed[2], packed[3]);
-  }
-  const rumble = Module._ps2web_rumble(), now = performance.now();
-  const strong = motorStrength(rumble >> 8), weak = rumble & 1;
-  const actuator = gamepad && gamepad.vibrationActuator;
-  if (actuator && (Math.abs(strong - lastStrong) > 0.08 || weak !== lastWeak || ((strong || weak) && now - rumbleAt > 100))) {
-    lastStrong = strong;
-    lastWeak = weak;
-    rumbleAt = now;
-    const done = strong || weak ? actuator.playEffect('dual-rumble', { duration: 200, weakMagnitude: weak, strongMagnitude: strong }) : actuator.reset();
-    if (done && done.catch) done.catch(() => {});
-  }
+  if (querSegundo) enviar(1, lerControle(pads[1], { buttons: 0, lx: 128, ly: 128 }), pads[1]);
 }
 
 // some browsers cannot show a canvas drawn by another GPU (hybrid laptops on Linux), so each adapter draws a few test frames first

@@ -1,8 +1,15 @@
 diff --git a/recomp/analysis.cpp b/recomp/analysis.cpp
-index e2f2580..acd0a92 100644
+index e2f2580..674a1d0 100644
 --- a/recomp/analysis.cpp
 +++ b/recomp/analysis.cpp
-@@ -189,9 +189,9 @@ Program analyse(const Image &image, const std::vector<std::uint32_t> &extra_entr
+@@ -184,14 +184,15 @@ std::vector<std::uint32_t> computed_branches(const Image &image, const Program &
+ 
+ }
+ 
+-Program analyse(const Image &image, const std::vector<std::uint32_t> &extra_entries, const std::set<std::uint32_t> &dynamic) {
++Program analyse(const Image &image, const std::vector<std::uint32_t> &extra_entries, const std::set<std::uint32_t> &dynamic,
++                const std::vector<std::uint32_t> &outside_candidates) {
+     Program p;
      p.dynamic = dynamic;
      p.base = UINT32_MAX;
      for (const auto &segment : image.segments()) {
@@ -14,6 +21,28 @@ index e2f2580..acd0a92 100644
      }
      p.end &= ~3u;
      p.code.assign((p.end - p.base) >> 2, 0);
+@@ -218,6 +219,7 @@ Program analyse(const Image &image, const std::vector<std::uint32_t> &extra_entr
+         std::vector<std::uint32_t> candidates = address_constants(image, p);
+         const std::vector<std::uint32_t> branches = computed_branches(image, p);
+         candidates.insert(candidates.end(), branches.begin(), branches.end());
++        candidates.insert(candidates.end(), outside_candidates.begin(), outside_candidates.end());
+         for (const auto &segment : image.segments())
+             for (std::size_t offset = 0; offset + 4 <= segment.bytes.size(); offset += 4)
+                 candidates.push_back(*image.word(segment.address + static_cast<std::uint32_t>(offset)));
+diff --git a/recomp/analysis.hpp b/recomp/analysis.hpp
+index a376d0e..9325e9f 100644
+--- a/recomp/analysis.hpp
++++ b/recomp/analysis.hpp
+@@ -23,6 +23,8 @@ struct Program {
+     }
+ };
+ 
+-Program analyse(const Image &image, const std::vector<std::uint32_t> &extra_entries, const std::set<std::uint32_t> &dynamic = {});
++// candidates: addresses seen somewhere else (pointers in another image's data); each is kept only if it reads as code here
++Program analyse(const Image &image, const std::vector<std::uint32_t> &extra_entries, const std::set<std::uint32_t> &dynamic = {},
++                const std::vector<std::uint32_t> &candidates = {});
+ 
+ }
 diff --git a/recomp/elf.cpp b/recomp/elf.cpp
 index d46fd36..ef5ad1b 100644
 --- a/recomp/elf.cpp

@@ -93,6 +93,42 @@ O raio-x ainda aponta funções que esses drivers importam e a máquina não tem
 `cdvdman` (streaming de disco), `ioman` #20/#21 (registrar dispositivo) e
 `secrman` #4/#5 (autenticação do memory card). Ficam no radar.
 
+## Achado 4: o vídeo que não existe
+
+Depois da abertura da Equipe Bomba Patch, o `title.ovl` manda tocar
+`cdrom0:\WE10_OP.PSS;1`, o vídeo de abertura do Winning Eleven 10. Esse
+arquivo não está no disco do Bomba Patch, e o tocador desiste. Na faxina
+(`0x1308F8` no executável) ele:
+
+1. desliga a interrupção de VBlank (causa 2) com `DisableIntc`
+2. remove o tratador dele com `RemoveIntcHandler`
+3. religa o VBlank **se a remoção responder diferente de zero**
+
+No console, `RemoveIntcHandler` responde quantos tratadores ainda sobram naquela
+causa. Como o jogo tem o dele (`0x145EB0`, que conta os quadros), sobra um e o
+VBlank volta. A máquina respondia sempre 0: o VBlank ficava desligado e o jogo
+esperava para sempre, no laço de `0x139AC8`, um quadro que não vinha.
+
+**Conserto:** `patches/0005`. `RemoveIntcHandler` e `RemoveDmacHandler` agora
+respondem quantos tratadores restam na mesma causa ou canal.
+
+## Achado 5: chamadas que o tradutor não via
+
+Além dos `jal`, os overlays saltam para o executável com `j` (chamada de cauda),
+o executável chama funções "folha" dos overlays (que não abrem espaço na pilha)
+e monta endereços na hora com `lui` + `addiu`. Cada um desses custava uma rodada
+de teste. O `patches/0002` passou a oferecer todos como candidatos, conferidos
+pelo próprio tradutor, e o jogo agora roda os 90 segundos do teste sem parar
+por código não traduzido.
+
+## Dois jogadores
+
+O PS2 de mentira tinha as duas portas de controle, mas só a primeira ligada, e a
+página lia só um controle. `patches/0004` deixa a porta 2 ligável a qualquer
+momento e a página passa a ler dois controles: teclado e primeiro controle são o
+Jogador 1, o segundo controle é o Jogador 2. Testado no disco de teste com dois
+controles simulados no navegador.
+
 ## Linha do tempo das tentativas
 
 | tentativa | o que aconteceu |
@@ -100,4 +136,7 @@ O raio-x ainda aponta funções que esses drivers importam e a máquina não tem
 | 1 | carregador recusou o executável (segmento em `0x03000000`) |
 | 2 | reiniciou o IOP, carregou os 12 drivers, leu `ROMLIST.DIR`, abriu os AFS e parou em `0x008CC320`, dentro do `bootset.ovl` |
 | 3 | com suporte a overlays: entrou no `bootset.ovl` (a checagem do memory card) e foi parando em funções do executável que só os overlays chamam, uma por rodada |
-| 4 | com as chamadas cruzadas: em andamento |
+| 4 | com as chamadas cruzadas: tela do memory card e abertura da Equipe Bomba Patch aparecem; depois tela preta |
+| 5 | tela preta explicada: vídeo `WE10_OP.PSS` ausente e VBlank desligado na faxina do tocador (achado 4) |
+| 6 | com o `patches/0005`: passou do vídeo e chegou na tela de título |
+| 7 | tradutor com ponteiros e chamadas de cauda: em andamento |

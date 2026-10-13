@@ -1,0 +1,18 @@
+diff --git a/runtime/src/kernel.cpp b/runtime/src/kernel.cpp
+index a8a6b4d..1a2d43a 100644
+--- a/runtime/src/kernel.cpp
++++ b/runtime/src/kernel.cpp
+@@ -240,9 +240,12 @@ void add_handler(Cpu &c, std::vector<Handler> &list) {
+ }
+ 
+ void remove_handler(Cpu &c, std::vector<Handler> &list) {
++    const std::uint32_t cause = arg(c, 0);
+     const int id = static_cast<int>(arg(c, 1));
+     list.erase(std::remove_if(list.begin(), list.end(), [&](const Handler &h) { return h.id == id; }), list.end());
+-    ret(c, 0);
++    // the console answers how many handlers are left for that cause or channel, and libraries rely on it: the movie
++    // player of Winning Eleven 10 disables VBLANK_START on exit and enables it again only when handlers remain
++    ret(c, static_cast<std::int64_t>(std::count_if(list.begin(), list.end(), [&](const Handler &h) { return h.cause == cause; })));
+ }
+ 
+ void fire_alarm(int id);

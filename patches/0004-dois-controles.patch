@@ -1,0 +1,111 @@
+diff --git a/host/web.cpp b/host/web.cpp
+index cd8bb9e..b826506 100644
+--- a/host/web.cpp
++++ b/host/web.cpp
+@@ -329,6 +329,25 @@ extern "C" EMSCRIPTEN_KEEPALIVE void ps2web_pressure(int a, int b, int c, int d)
+ 
+ extern "C" EMSCRIPTEN_KEEPALIVE int ps2web_rumble() { return ps2::pad_rumble(); }
+ 
++// port 0 is player 1 and port 1 is player 2; the page plugs the second controller in when a second gamepad shows up
++extern "C" EMSCRIPTEN_KEEPALIVE void ps2web_pad_at(int port, int buttons, int lx, int ly, int rx, int ry) {
++    ps2::set_pad_buttons(port, static_cast<std::uint16_t>(buttons));
++    ps2::set_pad_axis(port, 0, static_cast<std::uint8_t>(rx));
++    ps2::set_pad_axis(port, 1, static_cast<std::uint8_t>(ry));
++    ps2::set_pad_axis(port, 2, static_cast<std::uint8_t>(lx));
++    ps2::set_pad_axis(port, 3, static_cast<std::uint8_t>(ly));
++}
++
++extern "C" EMSCRIPTEN_KEEPALIVE void ps2web_pressure_at(int port, int a, int b, int c, int d) {
++    const int packed[4] = {a, b, c, d};
++    for (int i = 0; i < 16; ++i)
++        ps2::set_pad_pressure(port, i, static_cast<std::uint8_t>(static_cast<unsigned>(packed[i / 4]) >> (i % 4 * 8)));
++}
++
++extern "C" EMSCRIPTEN_KEEPALIVE int ps2web_rumble_at(int port) { return ps2::pad_rumble(port); }
++
++extern "C" EMSCRIPTEN_KEEPALIVE void ps2web_pad_connected(int port, int connected) { ps2::set_pad_connected(port, connected != 0); }
++
+ extern "C" EMSCRIPTEN_KEEPALIVE void ps2web_resize(int width, int height) {
+     ps2::resize_window(static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height));
+ }
+diff --git a/runtime/include/ps2/system.hpp b/runtime/include/ps2/system.hpp
+index 0eb5552..f6ca676 100644
+--- a/runtime/include/ps2/system.hpp
++++ b/runtime/include/ps2/system.hpp
+@@ -115,6 +115,12 @@ void set_pad_buttons(std::uint16_t pressed);
+ void set_pad_axis(int axis, std::uint8_t value);
+ void set_pad_pressure(int button, std::uint8_t value);
+ std::uint16_t pad_rumble();
++// the same for a given port: 0 is player 1, 1 is player 2
++void set_pad_buttons(int pad, std::uint16_t pressed);
++void set_pad_axis(int pad, int axis, std::uint8_t value);
++void set_pad_pressure(int pad, int button, std::uint8_t value);
++std::uint16_t pad_rumble(int pad);
++void set_pad_connected(int pad, bool connected);
+ void set_audio_sink(std::function<void(const std::int16_t *samples, std::size_t frames)> sink);
+ 
+ }
+diff --git a/runtime/src/iop/sio2.cpp b/runtime/src/iop/sio2.cpp
+index 60adac5..03281e7 100644
+--- a/runtime/src/iop/sio2.cpp
++++ b/runtime/src/iop/sio2.cpp
+@@ -62,6 +62,7 @@ std::uint32_t g_index = 0;
+ std::uint32_t g_stat = 0;
+ std::deque<std::uint8_t> g_in, g_out;
+ Pad g_pads[2];
++bool g_plugged[2] = {true, false};
+ Feel g_feel[2];
+ Card g_card;
+ Dma g_dma[2];
+@@ -310,7 +311,8 @@ void reset() {
+     g_out.clear();
+     g_pads[0] = Pad{};
+     g_pads[1] = Pad{};
+-    g_pads[0].connected = true;
++    g_pads[0].connected = g_plugged[0];
++    g_pads[1].connected = g_plugged[1];
+     for (Feel &f : g_feel) {
+         std::fill(std::begin(f.motors), std::end(f.motors), 0xFF);
+         f.rumble.store(0);
+@@ -388,6 +390,12 @@ void arm_dma(int channel, std::uint32_t madr, std::uint32_t block_words, std::ui
+     d.blocks = blocks;
+ }
+ 
++void set_connected(int pad, bool connected) {
++    if (pad < 0 || pad >= 2) return;
++    g_plugged[pad] = connected;
++    g_pads[pad].connected = connected;
++}
++
+ void set_buttons(int pad, std::uint16_t pressed_mask) {
+     if (pad >= 0 && pad < 2) g_pads[pad].buttons = pressed_mask;
+ }
+diff --git a/runtime/src/iop/sio2.hpp b/runtime/src/iop/sio2.hpp
+index 262e7a7..eadd898 100644
+--- a/runtime/src/iop/sio2.hpp
++++ b/runtime/src/iop/sio2.hpp
+@@ -15,6 +15,8 @@ std::uint32_t read(std::uint32_t a);
+ void write(std::uint32_t a, std::uint32_t v);
+ void arm_dma(int channel, std::uint32_t madr, std::uint32_t block_words, std::uint32_t blocks);
+ void set_buttons(int pad, std::uint16_t pressed_mask);
++// plugs or unplugs a controller; the second port starts empty and survives resets in the state the host chose
++void set_connected(int pad, bool connected);
+ void set_axis(int pad, int axis, std::uint8_t value);
+ void set_pressure(int pad, int button, std::uint8_t value);
+ std::uint16_t rumble(int pad);
+diff --git a/runtime/src/system.cpp b/runtime/src/system.cpp
+index 38def2d..a7d4470 100644
+--- a/runtime/src/system.cpp
++++ b/runtime/src/system.cpp
+@@ -532,6 +532,11 @@ void set_pad_buttons(std::uint16_t pressed) { iop::sio2::set_buttons(0, pressed)
+ void set_pad_axis(int axis, std::uint8_t value) { iop::sio2::set_axis(0, axis, value); }
+ void set_pad_pressure(int button, std::uint8_t value) { iop::sio2::set_pressure(0, button, value); }
+ std::uint16_t pad_rumble() { return iop::sio2::rumble(0); }
++void set_pad_buttons(int pad, std::uint16_t pressed) { iop::sio2::set_buttons(pad, pressed); }
++void set_pad_axis(int pad, int axis, std::uint8_t value) { iop::sio2::set_axis(pad, axis, value); }
++void set_pad_pressure(int pad, int button, std::uint8_t value) { iop::sio2::set_pressure(pad, button, value); }
++std::uint16_t pad_rumble(int pad) { return iop::sio2::rumble(pad); }
++void set_pad_connected(int pad, bool connected) { iop::sio2::set_connected(pad, connected); }
+ void set_audio_sink(std::function<void(const std::int16_t *, std::size_t)> sink) { iop::spu2::set_sink(std::move(sink)); }
+ 
+ }

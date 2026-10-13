@@ -54,7 +54,7 @@ index 26e71b8..9f58e3f 100644
  
  void generate(const std::vector<Translation> &translations, const CodegenOptions &options);
 diff --git a/recomp/main.cpp b/recomp/main.cpp
-index a448dee..f38ef99 100644
+index a448dee..3310b45 100644
 --- a/recomp/main.cpp
 +++ b/recomp/main.cpp
 @@ -1,6 +1,7 @@
@@ -65,10 +65,27 @@ index a448dee..f38ef99 100644
  #include "snr2.hpp"
  
  #include <algorithm>
-@@ -90,8 +91,45 @@ std::vector<Snr2Module> read_modules(const std::string &dir) {
+@@ -90,8 +91,62 @@ std::vector<Snr2Module> read_modules(const std::string &dir) {
      return modules;
  }
  
++// addresses code builds with lui + addiu/ori (or lui + ori), read straight from the words without a flow analysis;
++// a caller only uses them as candidates, so a pair that is not really an address costs nothing
++template <typename Word>
++void add_raw_constants(std::uint32_t begin, std::uint32_t end, Word word, std::vector<std::uint32_t> &out) {
++    for (std::uint32_t pc = begin; pc + 4 <= end; pc += 4) {
++        const std::uint32_t lui = word(pc);
++        if ((lui >> 26) != 0x0Fu) continue;
++        const std::uint32_t reg = (lui >> 16) & 31u, high = lui << 16;
++        for (std::uint32_t next = pc + 4; next < pc + 64 && next + 4 <= end; next += 4) {
++            const std::uint32_t insn = word(next), op = insn >> 26;
++            if ((op == 0x09u || op == 0x0Du) && ((insn >> 21) & 31u) == reg)
++                out.push_back(op == 0x09u ? high + static_cast<std::uint32_t>(static_cast<std::int16_t>(insn & 0xFFFFu)) : high | (insn & 0xFFFFu));
++            if (op == 0x0Fu && ((insn >> 16) & 31u) == reg) break;
++        }
++    }
++}
++
 +std::vector<Mwo3Overlay> read_overlays(const std::string &dir) {
 +    std::vector<std::filesystem::path> paths;
 +    for (const auto &entry : std::filesystem::directory_iterator(dir))
@@ -112,7 +129,7 @@ index a448dee..f38ef99 100644
      return 2;
  }
  
-@@ -99,7 +137,7 @@ int usage() {
+@@ -99,7 +154,7 @@ int usage() {
  
  int main(int argc, char **argv) {
      if (argc < 2) return usage();
@@ -121,7 +138,7 @@ index a448dee..f38ef99 100644
      bool stats = false;
      for (int i = 2; i < argc; ++i) {
          const std::string arg = argv[i];
-@@ -108,6 +146,7 @@ int main(int argc, char **argv) {
+@@ -108,6 +163,7 @@ int main(int argc, char **argv) {
          else if (arg == "--out" && i + 1 < argc) out = argv[++i];
          else if (arg == "--probes" && i + 1 < argc) probes_path = argv[++i];
          else if (arg == "--modules" && i + 1 < argc) modules_dir = argv[++i];
@@ -129,7 +146,7 @@ index a448dee..f38ef99 100644
          else return usage();
      }
  
-@@ -115,7 +154,26 @@ int main(int argc, char **argv) {
+@@ -115,7 +171,60 @@ int main(int argc, char **argv) {
          const Image image = Image::load(elf_path);
          const Entries entries = entries_path.empty() ? Entries{} : read_entries(entries_path);
          const Links imports = snr2_imports(image);
@@ -145,7 +162,41 @@ index a448dee..f38ef99 100644
 +                if (image.executable(target)) main_seeds.push_back(target);
 +                overlay_calls.push_back(target);
 +            }
-+        Program program = analyse(image, main_seeds, dynamic_sites(imports));
++        // and they keep pointers to each other's functions in their data (callback and state tables): every aligned word
++        // of one image that falls in another's code is a candidate there, kept only if it reads as code
++        std::vector<std::uint32_t> words;
++        if (!overlays.empty()) {
++            for (const auto &segment : image.segments())
++                for (std::size_t o = 0; o + 4 <= segment.bytes.size(); o += 4) words.push_back(*image.word(segment.address + static_cast<std::uint32_t>(o)));
++            for (const Mwo3Overlay &o : overlays)
++                for (std::size_t k = 0x40; k + 4 <= o.bytes.size(); k += 4) {
++                    std::uint32_t w;
++                    std::memcpy(&w, o.bytes.data() + k, 4);
++                    words.push_back(w);
++                }
++            for (const auto &segment : image.segments())
++                if (segment.code_bytes)
++                    add_raw_constants(segment.address, segment.address + segment.code_bytes, [&](std::uint32_t a) { return *image.word(a); }, words);
++            for (const Mwo3Overlay &o : overlays)
++                add_raw_constants(o.text_begin, o.text_end, [&](std::uint32_t a) {
++                    std::uint32_t w;
++                    std::memcpy(&w, o.bytes.data() + (a - o.origin), 4);
++                    return w;
++                }, words);
++            std::erase_if(words, [](std::uint32_t w) { return (w & 3u) || w < 0x00100000u || w >= 0x02000000u; });
++            std::sort(words.begin(), words.end());
++            words.erase(std::unique(words.begin(), words.end()), words.end());
++        }
++        const auto words_in = [&](std::uint32_t begin, std::uint32_t end) {
++            return std::vector<std::uint32_t>(std::lower_bound(words.begin(), words.end(), begin), std::lower_bound(words.begin(), words.end(), end));
++        };
++        std::vector<std::uint32_t> main_candidates;
++        for (const auto &segment : image.segments())
++            if (segment.code_bytes) {
++                const auto in = words_in(segment.address, segment.address + segment.code_bytes);
++                main_candidates.insert(main_candidates.end(), in.begin(), in.end());
++            }
++        Program program = analyse(image, main_seeds, dynamic_sites(imports), main_candidates);
 +        if (!overlays.empty())
 +            for (std::uint32_t pc = program.base; pc < program.end; pc += 4) {
 +                if (!program.is_code(pc)) continue;
@@ -157,7 +208,7 @@ index a448dee..f38ef99 100644
          std::map<Op, std::size_t> histogram;
          for (std::uint32_t pc = program.base; pc < program.end; pc += 4)
              if (program.is_code(pc)) ++histogram[decode(*image.word(pc), pc).op];
-@@ -142,6 +200,25 @@ int main(int argc, char **argv) {
+@@ -142,6 +251,28 @@ int main(int argc, char **argv) {
              std::printf("%zu modules, code %zu instructions (%zu KiB), %zu sites in the program linked at run time\n", modules.size(), module_code,
                          module_code * 4 / 1024, imports.size());
  
@@ -172,7 +223,10 @@ index a448dee..f38ef99 100644
 +                if (mwo3_opens_frame(o, *it)) seeds.push_back(*it);
 +            if (const auto it = entries.modules.find(o.name); it != entries.modules.end())
 +                for (std::uint32_t offset : it->second) seeds.push_back(o.origin + offset);
-+            programs.push_back(analyse(images.back(), seeds, {}));
++            // the other calls into the range (leaf functions open no frame) are only candidates: read as code or dropped
++            std::vector<std::uint32_t> candidates = words_in(o.text_begin, o.text_end);
++            for (auto it = from; it != overlay_calls.end() && *it < o.text_end; ++it) candidates.push_back(*it);
++            programs.push_back(analyse(images.back(), seeds, {}, candidates));
 +            overlay_code += code_size(programs.back());
 +            translations.push_back({&images.back(), &programs.back(), nullptr, "o_" + o.name + "_", false, o.name, o.size,
 +                                    overlay_checks(o, programs.back()), o.origin});
@@ -185,10 +239,10 @@ index a448dee..f38ef99 100644
              options.output = out;
 diff --git a/recomp/mwo3.cpp b/recomp/mwo3.cpp
 new file mode 100644
-index 0000000..0cc1e63
+index 0000000..3fa668f
 --- /dev/null
 +++ b/recomp/mwo3.cpp
-@@ -0,0 +1,80 @@
+@@ -0,0 +1,83 @@
 +#include "mwo3.hpp"
 +
 +#include <cctype>
@@ -233,8 +287,11 @@ index 0000000..0cc1e63
 +std::vector<std::uint32_t> mwo3_call_targets(const Mwo3Overlay &overlay) {
 +    std::vector<std::uint32_t> targets;
 +    for (std::uint32_t at = overlay.text_begin; at + 4 <= overlay.text_end; at += 4) {
-+        const std::uint32_t word = u32(overlay.bytes, at - overlay.origin);
-+        if ((word >> 26) == 3u) targets.push_back((at & 0xF0000000u) | ((word & 0x03FFFFFFu) << 2));
++        const std::uint32_t word = u32(overlay.bytes, at - overlay.origin), op = word >> 26;
++        if (op != 2u && op != 3u) continue;
++        const std::uint32_t target = (at & 0xF0000000u) | ((word & 0x03FFFFFFu) << 2);
++        // jal anywhere; j only when it leaves the overlay (a tail call), since inside it is just a jump
++        if (op == 3u || target - overlay.origin >= overlay.size) targets.push_back(target);
 +    }
 +    return targets;
 +}
@@ -271,10 +328,10 @@ index 0000000..0cc1e63
 +}
 diff --git a/recomp/mwo3.hpp b/recomp/mwo3.hpp
 new file mode 100644
-index 0000000..c110144
+index 0000000..f9d917d
 --- /dev/null
 +++ b/recomp/mwo3.hpp
-@@ -0,0 +1,37 @@
+@@ -0,0 +1,38 @@
 +#pragma once
 +
 +#include "elf.hpp"
@@ -307,7 +364,8 @@ index 0000000..c110144
 +Image mwo3_image(const Mwo3Overlay &overlay);
 +// function starts a compiler leaves behind: a stack frame opened right after the previous function returned
 +std::vector<std::uint32_t> mwo3_function_starts(const Mwo3Overlay &overlay);
-+// targets of every jal in an overlay's text: the functions it calls, in itself, in the program or in other overlays
++// targets of every jal in an overlay's text, and of every j that leaves it (tail calls): the functions it calls, in itself,
++// in the program or in other overlays
 +std::vector<std::uint32_t> mwo3_call_targets(const Mwo3Overlay &overlay);
 +bool mwo3_opens_frame(const Mwo3Overlay &overlay, std::uint32_t address);
 +
