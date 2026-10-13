@@ -139,4 +139,6 @@ controles simulados no navegador.
 | 4 | com as chamadas cruzadas: tela do memory card e abertura da Equipe Bomba Patch aparecem; depois tela preta |
 | 5 | tela preta explicada: vídeo `WE10_OP.PSS` ausente e VBlank desligado na faxina do tocador (achado 4) |
 | 6 | com o `patches/0005`: passou do vídeo e chegou na tela de título |
-| 7 | tradutor com ponteiros e chamadas de cauda: em andamento |
+| 7 | tradutor com ponteiros e chamadas de cauda: **menu principal na tela** (Duelo, Master Liga, Liga, Copa...), rodando os 90 segundos sem parar |
+| 8 | o "baixo" no menu chamou atalhos de uma instrução do `select1.ovl` (`j` direto para o executável) que o verificador do tradutor recusava; corrigido no `patches/0001` |
+| 9 | roteiro novo (X a cada 2 segundos depois do menu) para atravessar Duelo, escolha de times e partida: em andamento |

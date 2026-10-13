@@ -1,8 +1,26 @@
 diff --git a/recomp/analysis.cpp b/recomp/analysis.cpp
-index e2f2580..674a1d0 100644
+index e2f2580..4261972 100644
 --- a/recomp/analysis.cpp
 +++ b/recomp/analysis.cpp
-@@ -184,14 +184,15 @@ std::vector<std::uint32_t> computed_branches(const Image &image, const Program &
+@@ -52,8 +52,15 @@ public:
+                 if (has_delay_slot(decode(*image_.word(pc + 4), pc + 4).op)) return false;
+                 seen.insert(pc + 4);
+                 if (f == Flow::Branch || f == Flow::BranchLikely || (f == Flow::Jump && !p_.dynamic.count(pc))) {
+-                    if (!valid_target(insn.branch_target_of())) return false;
+-                    pending.push_back(insn.branch_target_of());
++                    const std::uint32_t target = insn.branch_target_of();
++                    // a j that leaves the image is a tail call into other code (an overlay jumping to the program,
++                    // or the program to an overlay); it ends this path instead of disqualifying it
++                    const bool tail_call = f == Flow::Jump && insn.op == Op::J && !valid_target(target) && (target & 3u) == 0 &&
++                                           target >= 0x00100000u && target < 0x02000000u;
++                    if (!tail_call) {
++                        if (!valid_target(target)) return false;
++                        pending.push_back(target);
++                    }
+                 }
+                 if (f == Flow::Jump || f == Flow::JumpRegister) break;
+                 pc += 8;
+@@ -184,14 +191,15 @@ std::vector<std::uint32_t> computed_branches(const Image &image, const Program &
  
  }
  
@@ -21,7 +39,7 @@ index e2f2580..674a1d0 100644
      }
      p.end &= ~3u;
      p.code.assign((p.end - p.base) >> 2, 0);
-@@ -218,6 +219,7 @@ Program analyse(const Image &image, const std::vector<std::uint32_t> &extra_entr
+@@ -218,6 +226,7 @@ Program analyse(const Image &image, const std::vector<std::uint32_t> &extra_entr
          std::vector<std::uint32_t> candidates = address_constants(image, p);
          const std::vector<std::uint32_t> branches = computed_branches(image, p);
          candidates.insert(candidates.end(), branches.begin(), branches.end());
