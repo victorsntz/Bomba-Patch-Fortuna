@@ -64,10 +64,15 @@ no_docker() {
   command -v docker > /dev/null || falha "neste sistema o kit roda dentro do Docker. Instale o Docker Desktop (https://www.docker.com/products/docker-desktop) e tente de novo. No Windows, outra saída é usar o WSL2 com Ubuntu."
   local alvo=base
   case "${1:-}" in investigar|rea) alvo=investigacao ;; esac
-  local tag="bomba-patch-fortuna:$alvo-$(uname -m)-$(cksum < "$ROOT/docker/Dockerfile" | cut -d' ' -f1)"
-  # Mac com chip M roda a imagem ARM nativa, sem fingir ser Intel; FORTUNA_PLATAFORMA=linux/amd64 força o contrário
-  local plataforma=()
-  [ -n "${FORTUNA_PLATAFORMA:-}" ] && plataforma=(--platform "$FORTUNA_PLATAFORMA")
+  # a imagem Intel (linux/amd64) é a testada de ponta a ponta; no Mac com chip M o Docker roda ela pelo Rosetta.
+  # FORTUNA_PLATAFORMA=nativa tenta a imagem do próprio processador, que é mais rápida mas ainda não foi testada
+  local plataforma=(--platform linux/amd64) arquitetura=amd64
+  case "${FORTUNA_PLATAFORMA:-}" in
+    nativa) plataforma=(); arquitetura=$(uname -m) ;;
+    '') ;;
+    *) plataforma=(--platform "$FORTUNA_PLATAFORMA"); arquitetura=${FORTUNA_PLATAFORMA##*/} ;;
+  esac
+  local tag="bomba-patch-fortuna:$alvo-$arquitetura-$(cksum < "$ROOT/docker/Dockerfile" | cut -d' ' -f1)"
   if ! docker image inspect "$tag" > /dev/null 2>&1; then
     passo "montando a imagem Docker ($alvo). Só na primeira vez, demora uns minutos"
     docker build ${plataforma[@]+"${plataforma[@]}"} --target "$alvo" -t "$tag" "$ROOT/docker"
@@ -92,7 +97,9 @@ no_docker() {
   fi
   local porta=()
   [ "${1:-}" = jogar ] && porta=(-p "127.0.0.1:${FORTUNA_PORTA:-8620}:${FORTUNA_PORTA:-8620}")
-  exec docker run --rm -it ${plataforma[@]+"${plataforma[@]}"} "${volumes[@]}" ${porta[@]+"${porta[@]}"} -e FORTUNA_SEM_DOCKER=1 -e FORTUNA_NO_CONTEINER=1 \
+  local terminal=()
+  [ -t 0 ] && [ -t 1 ] && terminal=(-it)
+  exec docker run --rm ${terminal[@]+"${terminal[@]}"} ${plataforma[@]+"${plataforma[@]}"} "${volumes[@]}" ${porta[@]+"${porta[@]}"} -e FORTUNA_SEM_DOCKER=1 -e FORTUNA_NO_CONTEINER=1 \
     "$tag" ./fortuna "${args[@]}"
 }
 
