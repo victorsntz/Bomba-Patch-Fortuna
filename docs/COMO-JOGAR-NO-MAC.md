@@ -61,6 +61,18 @@ e o prato chega no **Chrome**, que abre sozinho em **http://localhost:8620**
 
 Deixe o Terminal aberto enquanto joga. Para parar, volte nele e aperte `Ctrl + C`.
 
+## Quando sair conserto novo
+
+```bash
+cd ~/Bomba-Patch-Fortuna
+git pull
+./fortuna portar bomba
+./fortuna jogar bomba
+```
+
+O `portar` aplica os consertos novos e refaz só o que mudou. Leva menos tempo
+que a primeira vez.
+
 ## Perdeu o fio?
 
 ```bash

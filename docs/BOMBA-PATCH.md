@@ -121,6 +121,25 @@ de teste. O `patches/0002` passou a oferecer todos como candidatos, conferidos
 pelo próprio tradutor, e o jogo agora roda os 90 segundos do teste sem parar
 por código não traduzido.
 
+## Achado 6: a memória de vídeo lida de volta chegava velha
+
+No navegador o jogo roda em três frentes ao mesmo tempo (o processador principal,
+o VU1 e o "pintor"). Quando o jogo pede para ler de volta um pedaço da memória de
+vídeo, a máquina tinha um atalho: se o pedido era igual a um anterior (mesmo
+lugar, mesmo tamanho), ela devolvia na hora a resposta antiga e só atualizava
+depois. Isso serve para quem lê sempre a mesma imagem a cada quadro.
+
+O Winning Eleven faz outra coisa na tela de carregamento da partida: converte as
+texturas uma atrás da outra passando pelo mesmo cantinho da memória de vídeo. Com
+o atalho, cada textura recebia o conteúdo da anterior. Resultado na partida: campo
+preto com listras ou verde chapado, jogadores verdes e placar em blocos. Não
+aparecia nos testes nativos porque lá tudo roda numa fila só, e não aparecia
+começando de um save state porque as texturas já vinham prontas.
+
+**Conserto:** `patches/0006`. A leitura de volta agora espera o pintor e devolve
+o conteúdo do momento. O atalho continua disponível com `PS2_REUSE_DOWNLOADS=1`
+para quem precisar.
+
 ## Dois jogadores
 
 O PS2 de mentira tinha as duas portas de controle, mas só a primeira ligada, e a
@@ -144,6 +163,8 @@ controles simulados no navegador.
 | 9 | X a cada 2 segundos no menu: nada acontece. A base é japonesa, então quem confirma é a bolinha (○) |
 | 10 | com ○: Selecionar Time, Menu de Configuração, carregamento, Maracanã em 3D, torcida, entrada em campo e escalação |
 | 11 | rodada de 3 min 30 s com chute e corrida: **partida rolando**, placar, relógio, radar, Casé TV e placas Bomba Patch |
+| 12 | primeiro Mac de verdade (chip M, Chrome, placa de vídeo pelo Metal): menus e escalação a 60 quadros por segundo, mas a partida com campo preto, jogadores verdes e cores piscando |
+| 13 | reproduzido aqui no navegador, do zero até a partida: era a leitura de volta da memória de vídeo (achado 6). Com o `patches/0006`, estádio, torcida, grama e placas voltam |
 
 ## O que falta
 
@@ -151,6 +172,6 @@ controles simulados no navegador.
   pele sai lisa, sem a textura do rosto. O Winning Eleven monta cada rosto numa
   textura em tempo real; algo nessa composição não acontece no "pintor" (GS) da
   máquina. Investigando com despejo da memória de vídeo na hora da escalação.
-- **Versão navegador:** compilando e testando no Chrome.
+- **Versão navegador:** roda no Mac a 60 quadros por segundo pela placa de vídeo.
 - **Vídeo de abertura:** o disco não traz `WE10_OP.PSS`, então o jogo pula o
   vídeo (como no PS2).
