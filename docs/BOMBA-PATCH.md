@@ -158,6 +158,21 @@ com tudo numa fila só (`PS2_ONE_THREAD=1`), zero etiquetas estranhas.
 **Conserto:** `patches/0007`. TOP e ITOP passam a ser de cada VU. Depois do
 conserto, `reglist 0 image 0` e a partida inteira na placa de vídeo.
 
+## Achado 8: o relógio preso no som
+
+A página acerta o ritmo do jogo pelo som: a cada quadro o emulador olha quanto
+som ainda não foi tocado e segura o passo se tiver mais de 80 ms na fila. Quem
+esvazia essa fila é o navegador.
+
+A espera não tinha limite. Quando o navegador para de consumir o som (aba em
+segundo plano, troca de dispositivo de áudio, contexto de áudio suspenso), a
+fila nunca baixa e o emulador fica preso ali para sempre: nada avança e o
+processador fica a 100%.
+
+**Conserto:** `patches/0008`. A espera só continua enquanto a fila realmente
+anda; parada por um quarto de segundo, o relógio volta a ser o do tempo. A
+página religa o relógio do som assim que ele voltar a tocar.
+
 ## Dois jogadores
 
 O PS2 de mentira tinha as duas portas de controle, mas só a primeira ligada, e a
@@ -186,6 +201,7 @@ controles simulados no navegador.
 | 14 | com o `patches/0006` o Mac mudou de defeito: campo preto e travamento |
 | 15 | reproduzido no executor nativo com janela (três frentes ligadas e placa de vídeo desenhando), que é a combinação do navegador. Era o TOP compartilhado entre os dois VUs (achado 7) |
 | 16 | com o `patches/0007` o desenho ficou certo e o jogo passou a alcançar código nunca rodado: parada em `missing code at 0x00987110`, no `game.ovl`. Endereço novo no mapa |
+| 17 | ainda travava depois de uns segundos de bola rolando. No executor nativo, 20.000 quadros limpos: era defeito só do navegador. Era a espera sem limite pelo som (achado 8). Com o conserto, 75.000 quadros a 60 por segundo |
 
 ## O que falta
 

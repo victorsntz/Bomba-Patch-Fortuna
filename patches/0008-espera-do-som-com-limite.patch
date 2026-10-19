@@ -1,0 +1,28 @@
+--- a/host/web.cpp
++++ b/host/web.cpp
+@@ -270,7 +270,24 @@
+ void pace() {
+     ps2::post_present();
+     if (g_audio.active.load()) {
+-        while (audio_queued_ms() > 80.0) usleep(1000);
++        // O relogio do jogo segue o som, mas quem consome o som e a pagina. Quando o navegador para de consumir (aba em
++        // segundo plano, troca de fone, contexto de audio suspenso) a fila nunca baixa, e esperar sem limite congelava o
++        // jogo de vez. Aqui a espera so continua enquanto a fila anda; parada, o relogio volta a ser o do tempo.
++        std::uint32_t drenado = g_audio.read.load();
++        double desde = emscripten_get_now();
++        while (audio_queued_ms() > 80.0) {
++            usleep(1000);
++            const std::uint32_t agora = g_audio.read.load();
++            if (agora != drenado) {
++                drenado = agora;
++                desde = emscripten_get_now();
++                continue;
++            }
++            if (emscripten_get_now() - desde > 250.0) {
++                g_audio.active.store(0);  // a pagina liga de novo assim que o som voltar a tocar
++                break;
++            }
++        }
+         g_next_frame = 0.0;
+         return;
+     }
