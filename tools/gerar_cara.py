@@ -149,6 +149,7 @@ function pollInput() {
 """
 
 TROCAS = [
+    ('vigia', None),
     ('<html lang="en">', '<html lang="pt-BR">'),
     ('<title>ps2-web-recomp</title>', '<title>Bomba Patch Fortuna</title>\n<meta name="theme-color" content="#0a1f44">'),
     # o estilo inteiro até as regras dos controles de toque, que ficam como estão
@@ -197,10 +198,44 @@ TROCAS = [
     ("help.textContent = 'This browser cannot run the game yet. It lacks ' + missing.join(', ') + '. A current Chrome or Edge has everything it needs.';",
      "help.textContent = 'Este navegador ficou no banco de reservas: falta ' + missing.join(', ') + '. Chrome ou Edge atualizados têm tudo.';"),
     ("document.getElementById('start').textContent = 'Unsupported browser';", "document.getElementById('start').textContent = 'Navegador no banco';"),
-    ("statusEl.textContent = 'Running, ' + Module.gpuInfo;", "statusEl.textContent = 'Bola rolando, ' + Module.gpuInfo;"),
+    ("statusEl.textContent = 'Running, ' + Module.gpuInfo;", "statusEl.textContent = 'Bola rolando, ' + Module.gpuInfo;\n  vigia();"),
     ("statsEl.textContent = 'frame ' + Module._ps2web_frames() + '   ' + (frames * 1000 / span).toFixed(1) + ' fps (' + (shown * 1000 / span).toFixed(0) + ' on screen)   GPU '",
      "statsEl.textContent = 'quadro ' + Module._ps2web_frames() + '   ' + (frames * 1000 / span).toFixed(1) + ' fps (' + (shown * 1000 / span).toFixed(0) + ' na tela)   GPU '"),
 ]
+
+
+VIGIA = """
+// Vigia de travamento: se o jogo parar de avançar, conta na barra o que estava acontecendo na hora. Sem isso, uma trava
+// no computador de quem joga chega só como "travou", e daqui não dá para adivinhar quem estava esperando quem.
+function vigia() {
+  let ultimo = -1, paradoDesde = 0, avisado = false;
+  setInterval(() => {
+    if (!Module.running || !Module._ps2web_frames) return;
+    const quadro = Module._ps2web_frames();
+    const agora = performance.now();
+    if (quadro !== ultimo) {
+      ultimo = quadro;
+      paradoDesde = agora;
+      if (avisado) {
+        avisado = false;
+        statusEl.textContent = 'Bola rolando, ' + Module.gpuInfo;
+      }
+      return;
+    }
+    if (avisado || agora - paradoDesde < 5000) return;
+    avisado = true;
+    const n = (v) => (typeof v === 'number' && isFinite(v) ? Math.round(v) : '?');
+    const som = audio ? audio.state : 'sem áudio';
+    const fila = Module.audioQueuedMs ? n(Module.audioQueuedMs()) : '?';
+    const ocioso = Module._ps2web_idle_ms ? [0, 1, 2].map((i) => n(Module._ps2web_idle_ms(i))).join('/') : '?';
+    const aba = document.visibilityState;
+    statusEl.textContent = 'Travou no quadro ' + quadro + ' — som ' + som + ', fila ' + fila +
+      ' ms, ocioso emu/gs/vu ' + ocioso + ' ms, aba ' + aba + '. Me mande esta linha.';
+    console.warn('[vigia] ' + statusEl.textContent);
+  }, 1000);
+}
+
+"""
 
 
 def original():
@@ -222,6 +257,9 @@ def main():
             start = html.index('<style>')
             end = html.index('  .controls { display: none; }') + len('  .controls { display: none; }')
             html = html[:start] + ESTILO + html[end:]
+            continue
+        if old == 'vigia':
+            html = html.replace('var Module = {', VIGIA + 'var Module = {', 1)
             continue
         if html.count(old) != 1:
             sys.exit('o trecho mudou no motor e não bate mais:\n  %s' % old[:120])

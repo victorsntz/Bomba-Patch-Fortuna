@@ -596,6 +596,37 @@ const countShown = () => {
   requestAnimationFrame(countShown);
 };
 requestAnimationFrame(countShown);
+
+// Vigia de travamento: se o jogo parar de avançar, conta na barra o que estava acontecendo na hora. Sem isso, uma trava
+// no computador de quem joga chega só como "travou", e daqui não dá para adivinhar quem estava esperando quem.
+function vigia() {
+  let ultimo = -1, paradoDesde = 0, avisado = false;
+  setInterval(() => {
+    if (!Module.running || !Module._ps2web_frames) return;
+    const quadro = Module._ps2web_frames();
+    const agora = performance.now();
+    if (quadro !== ultimo) {
+      ultimo = quadro;
+      paradoDesde = agora;
+      if (avisado) {
+        avisado = false;
+        statusEl.textContent = 'Bola rolando, ' + Module.gpuInfo;
+      }
+      return;
+    }
+    if (avisado || agora - paradoDesde < 5000) return;
+    avisado = true;
+    const n = (v) => (typeof v === 'number' && isFinite(v) ? Math.round(v) : '?');
+    const som = audio ? audio.state : 'sem áudio';
+    const fila = Module.audioQueuedMs ? n(Module.audioQueuedMs()) : '?';
+    const ocioso = Module._ps2web_idle_ms ? [0, 1, 2].map((i) => n(Module._ps2web_idle_ms(i))).join('/') : '?';
+    const aba = document.visibilityState;
+    statusEl.textContent = 'Travou no quadro ' + quadro + ' — som ' + som + ', fila ' + fila +
+      ' ms, ocioso emu/gs/vu ' + ocioso + ' ms, aba ' + aba + '. Me mande esta linha.';
+    console.warn('[vigia] ' + statusEl.textContent);
+  }, 1000);
+}
+
 var Module = {
   canvas,
   arguments: ['/game/core.elf'].concat(params.has('arg') ? ['--arg', params.get('arg')] : [], params.getAll('press').flatMap((p) => p.split(',').flatMap((x) => ['--press', x]))),
@@ -690,6 +721,7 @@ document.getElementById('start').addEventListener('click', async () => {
   fitCanvas();
   await startAudio();
   statusEl.textContent = 'Bola rolando, ' + Module.gpuInfo;
+  vigia();
   Module.running = true;
   Module.callMain(Module.arguments);
 });

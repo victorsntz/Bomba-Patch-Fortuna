@@ -115,6 +115,10 @@ confirma é a **bolinha**.
   vídeo (WebGPU); outros navegadores podem cair no modo lento.
 - **Rostos dos jogadores lisos, tipo máscara**: é um defeito conhecido que eu
   ainda estou consertando. O resto do jogo funciona.
+- **Travou no meio do jogo**: espere uns cinco segundos olhando a barra de
+  baixo. Ela troca para uma linha que começa com "Travou no quadro ..." e diz
+  o que estava acontecendo na hora. Me mande essa linha; é ela que diz onde
+  consertar.
 - Qualquer outra coisa: tire um print do Terminal (`Cmd + Shift + 4`) e me
   mande, junto com o resultado do `./fortuna checar`.
 
