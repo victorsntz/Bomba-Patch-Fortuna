@@ -121,24 +121,18 @@ de teste. O `patches/0002` passou a oferecer todos como candidatos, conferidos
 pelo próprio tradutor, e o jogo agora roda os 90 segundos do teste sem parar
 por código não traduzido.
 
-## Achado 6: a memória de vídeo lida de volta chegava velha
+## Achado 6 (falso alarme): a leitura da memória de vídeo
 
-No navegador o jogo roda em três frentes ao mesmo tempo (o processador principal,
-o VU1 e o "pintor"). Quando o jogo pede para ler de volta um pedaço da memória de
-vídeo, a máquina tinha um atalho: se o pedido era igual a um anterior (mesmo
-lugar, mesmo tamanho), ela devolvia na hora a resposta antiga e só atualizava
-depois. Isso serve para quem lê sempre a mesma imagem a cada quadro.
+Durante um tempo a suspeita foi outra: quando o jogo pede de volta um pedaço
+da memória de vídeo, a máquina respondia na hora com o resultado de um pedido
+igual anterior. Parecia explicar as texturas trocadas. Um conserto que tirava
+esse atalho chegou a entrar no kit (`0006`) e melhorou os sintomas no desenho
+por software, mas deixava a frente do processador principal esperando a cada
+leitura, o que no Mac com placa de vídeo virava travamento.
 
-O Winning Eleven faz outra coisa na tela de carregamento da partida: converte as
-texturas uma atrás da outra passando pelo mesmo cantinho da memória de vídeo. Com
-o atalho, cada textura recebia o conteúdo da anterior. Resultado na partida: campo
-preto com listras ou verde chapado, jogadores verdes e placar em blocos. Não
-aparecia nos testes nativos porque lá tudo roda numa fila só, e não aparecia
-começando de um save state porque as texturas já vinham prontas.
-
-**Conserto:** `patches/0006`. A leitura de volta agora espera o pintor e devolve
-o conteúdo do momento. O atalho continua disponível com `PS2_REUSE_DOWNLOADS=1`
-para quem precisar.
+Com o achado 7 na mão, o teste decisivo: a partida sai perfeita com o atalho
+ligado, tanto no executor nativo com placa de vídeo quanto no navegador
+(18.600 quadros limpos). O atalho nunca foi o problema. O `0006` foi removido.
 
 ## Achado 7: dois VUs, um papelzinho só
 
@@ -189,8 +183,9 @@ controles simulados no navegador.
 | 11 | rodada de 3 min 30 s com chute e corrida: **partida rolando**, placar, relógio, radar, Casé TV e placas Bomba Patch |
 | 12 | primeiro Mac de verdade (chip M, Chrome, placa de vídeo pelo Metal): menus e escalação a 60 quadros por segundo, mas a partida com campo preto, jogadores verdes e cores piscando |
 | 13 | reproduzido aqui no navegador, do zero até a partida: era a leitura de volta da memória de vídeo (achado 6). Com o `patches/0006`, estádio, torcida, grama e placas voltam |
-| 14 | com o `patches/0006` o Mac mudou de defeito: campo preto e travamento. Eram dois problemas, um escondido atrás do outro |
+| 14 | com o `patches/0006` o Mac mudou de defeito: campo preto e travamento |
 | 15 | reproduzido no executor nativo com janela (três frentes ligadas e placa de vídeo desenhando), que é a combinação do navegador. Era o TOP compartilhado entre os dois VUs (achado 7) |
+| 16 | com o `patches/0007` o desenho ficou certo e o jogo passou a alcançar código nunca rodado: parada em `missing code at 0x00987110`, no `game.ovl`. Endereço novo no mapa |
 
 ## O que falta
 
