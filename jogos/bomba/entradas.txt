@@ -15,3 +15,6 @@ title:5b70
 title:a5a0
 select1:9e0
 select1:9d0
+# achado na partida, depois que o conserto 0007 deixou o campo desenhar e o jogo
+# passou a alcançar trechos que antes nunca rodavam
+game:83110
