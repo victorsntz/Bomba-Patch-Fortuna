@@ -140,6 +140,30 @@ começando de um save state porque as texturas já vinham prontas.
 o conteúdo do momento. O atalho continua disponível com `PS2_REUSE_DOWNLOADS=1`
 para quem precisar.
 
+## Achado 7: dois VUs, um papelzinho só
+
+O PS2 tem dois processadores de vetores, o VU0 (que ajuda o processador
+principal) e o VU1 (que desenha). Cada um lê os dados que o VIF entrega em
+duas gavetas que se revezam: enquanto o VU1 desenha a gaveta A, o VIF enche a
+B. Qual gaveta usar fica anotado num registrador chamado TOP, que o programa
+lê com a instrução XTOP.
+
+A máquina guardava **um** TOP só, compartilhado pelos dois VUs. Numa fila só
+isso nunca aparece: cada VU anota e usa na sequência. No navegador o VU1 roda
+numa frente separada, e aí um `MSCAL` do VIF0 na frente do processador
+principal zerava o TOP do VU1 no meio do serviço. O programa do VU1 ia buscar
+os vértices na gaveta errada, montava um pacote de desenho com lixo e o
+desenhista recebia etiquetas que não existem.
+
+Como aparece: no Bomba Patch, campo preto na partida (nenhum polígono do
+gramado chega), jogadores com sombra certa, placar em blocos. O contador de
+etiquetas denuncia: `path 1 tags: packed 20874611 reglist 3 image 49`, sendo
+que ali só pode haver `packed`. Sem a frente do VU1 (`PS2_NO_VU_THREAD=1`) ou
+com tudo numa fila só (`PS2_ONE_THREAD=1`), zero etiquetas estranhas.
+
+**Conserto:** `patches/0007`. TOP e ITOP passam a ser de cada VU. Depois do
+conserto, `reglist 0 image 0` e a partida inteira na placa de vídeo.
+
 ## Dois jogadores
 
 O PS2 de mentira tinha as duas portas de controle, mas só a primeira ligada, e a
@@ -165,6 +189,8 @@ controles simulados no navegador.
 | 11 | rodada de 3 min 30 s com chute e corrida: **partida rolando**, placar, relógio, radar, Casé TV e placas Bomba Patch |
 | 12 | primeiro Mac de verdade (chip M, Chrome, placa de vídeo pelo Metal): menus e escalação a 60 quadros por segundo, mas a partida com campo preto, jogadores verdes e cores piscando |
 | 13 | reproduzido aqui no navegador, do zero até a partida: era a leitura de volta da memória de vídeo (achado 6). Com o `patches/0006`, estádio, torcida, grama e placas voltam |
+| 14 | com o `patches/0006` o Mac mudou de defeito: campo preto e travamento. Eram dois problemas, um escondido atrás do outro |
+| 15 | reproduzido no executor nativo com janela (três frentes ligadas e placa de vídeo desenhando), que é a combinação do navegador. Era o TOP compartilhado entre os dois VUs (achado 7) |
 
 ## O que falta
 

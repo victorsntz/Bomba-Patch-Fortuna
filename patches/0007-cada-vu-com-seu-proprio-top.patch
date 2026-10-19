@@ -1,0 +1,110 @@
+diff --git a/runtime/src/vif.cpp b/runtime/src/vif.cpp
+index c6a718a..fd6b9d6 100644
+--- a/runtime/src/vif.cpp
++++ b/runtime/src/vif.cpp
+@@ -62,10 +62,10 @@ void run_vu(int unit, std::uint32_t address) {
+         u.dbf = !u.dbf;
+         u.tops = u.base + (u.dbf ? u.ofst : 0);
+         if (shadow(unit)) return;
+-        vu::set_tops(u.top, u.itop);
++        vu::set_tops(1, u.top, u.itop);
+     } else {
+         u.itop = u.itops;
+-        vu::set_tops(0, u.itop);
++        vu::set_tops(0, 0, u.itop);
+     }
+     vu::run(unit, address);
+ }
+diff --git a/runtime/src/vu_micro.cpp b/runtime/src/vu_micro.cpp
+index bb82081..0ca95ce 100644
+--- a/runtime/src/vu_micro.cpp
++++ b/runtime/src/vu_micro.cpp
+@@ -33,16 +33,18 @@ struct Unit {
+     std::uint32_t code_mask;
+     std::uint32_t data_qwords;
+     std::uint32_t tpc;
++    std::uint32_t index = 0;
+     vuops::FlagPipe *pipe = nullptr;
+ };
+ 
+ Vu0Regs g_vu1;
+-std::uint32_t g_top = 0, g_itop = 0;
++// cada VU tem o seu TOP e ITOP: com o VU1 numa frente propria, um VIF0 na frente da emulacao apagava os do VU1
++std::uint32_t g_top[2] = {0, 0}, g_itop[2] = {0, 0};
+ std::uint64_t g_reported = 0;
+ 
+ Unit unit_of(int n) {
+-    if (n == 0) return Unit{&g_cpu.vu0, g_vu0_code, g_vu0_mem, 4095u, 256u, g_cpu.vu0.tpc};
+-    return Unit{&g_vu1, g_vu1_code, g_vu1_mem, 16383u, 1024u, g_vu1.tpc};
++    if (n == 0) return Unit{&g_cpu.vu0, g_vu0_code, g_vu0_mem, 4095u, 256u, g_cpu.vu0.tpc, 0u};
++    return Unit{&g_vu1, g_vu1_code, g_vu1_mem, 16383u, 1024u, g_vu1.tpc, 1u};
+ }
+ 
+ struct UpperOut {
+@@ -520,8 +522,8 @@ void lower(Unit &u, std::uint32_t w, std::uint32_t pc, std::uint32_t &npc, bool
+         case 0x42: r.r = r.vf[fs].w[fsf] & 0x7FFFFFu; break;
+         case 0x43: r.r = (r.r ^ r.vf[fs].w[fsf]) & 0x7FFFFFu; break;
+         case 0x64: if (ft) for (int i = 0; i < 4; ++i) if (dest & (8u >> i)) r.vf[ft].w[i] = r.p; break;
+-        case 0x68: store_vi(r, it, g_top); break;
+-        case 0x69: store_vi(r, it, g_itop); break;
++        case 0x68: store_vi(r, it, g_top[u.index & 1u]); break;
++        case 0x69: store_vi(r, it, g_itop[u.index & 1u]); break;
+         case 0x6C: xgkick(u, r.vi[is]); break;
+         case 0x70: case 0x71: case 0x72: case 0x73: {
+             const float x = u2f(r.vf[fs].w[0]), y = u2f(r.vf[fs].w[1]), z = u2f(r.vf[fs].w[2]);
+@@ -623,16 +625,16 @@ void reset() {
+     }
+     std::memset(&g_vu1, 0, sizeof g_vu1);
+     g_vu1.vf[0].w[3] = fp::kOne;
+-    g_top = g_itop = 0;
++    g_top[0] = g_top[1] = g_itop[0] = g_itop[1] = 0;
+ }
+ 
+ Vu0Regs &regs(int unit) { return unit ? g_vu1 : g_cpu.vu0; }
+ 
+ std::uint32_t tpc(int unit) { return regs(unit).tpc; }
+ 
+-void set_tops(std::uint32_t top, std::uint32_t itop) {
+-    g_top = top;
+-    g_itop = itop;
++void set_tops(int unit, std::uint32_t top, std::uint32_t itop) {
++    g_top[unit & 1] = top;
++    g_itop[unit & 1] = itop;
+ }
+ 
+ void run_fast(int n, std::uint32_t address);
+@@ -706,8 +708,8 @@ void kick(int unit, std::uint32_t address) {
+     xgkick(u, address);
+ }
+ 
+-std::uint32_t top() { return g_top; }
+-std::uint32_t itop() { return g_itop; }
++std::uint32_t top() { return g_top[1]; }
++std::uint32_t itop() { return g_itop[1]; }
+ 
+ ProgramFn lookup(std::uint32_t address);
+ 
+@@ -982,8 +984,8 @@ namespace ps2::vu {
+ void state(ps2::state::Stream &s) {
+     s.tag("vu");
+     s.pod(g_vu1);
+-    s.pod(g_top);
+-    s.pod(g_itop);
++    s.pod(g_top[1]);
++    s.pod(g_itop[1]);
+     s.bytes(g_vu0_code, sizeof g_vu0_code);
+     s.bytes(g_vu0_mem, sizeof g_vu0_mem);
+     s.bytes(g_vu1_code, sizeof g_vu1_code);
+diff --git a/runtime/src/vu_micro.hpp b/runtime/src/vu_micro.hpp
+index 2b853a1..3143074 100644
+--- a/runtime/src/vu_micro.hpp
++++ b/runtime/src/vu_micro.hpp
+@@ -15,7 +15,7 @@ void state(ps2::state::Stream &s);
+ void reset();
+ void run(int unit, std::uint32_t address);
+ std::uint32_t tpc(int unit);
+-void set_tops(std::uint32_t top, std::uint32_t itop);
++void set_tops(int unit, std::uint32_t top, std::uint32_t itop);
+ void code_changed(int unit);
+ Vu0Regs &regs(int unit);
+ std::uint64_t interpreted_calls();
